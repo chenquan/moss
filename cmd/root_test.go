@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"cairn/internal/protocol"
+	"moss/internal/protocol"
 )
 
 func TestRootCommandExposesRuntimeAndInstaller(t *testing.T) {
@@ -37,14 +37,14 @@ func TestSkillInstallCommandAcceptsRepeatedTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stderr.Len() != 0 ||
-		!strings.Contains(stdout.String(), filepath.Join(".codex", "skills", "cairn")) ||
-		!strings.Contains(stdout.String(), filepath.Join(".claude", "skills", "cairn")) {
+		!strings.Contains(stdout.String(), filepath.Join(".codex", "skills", "moss")) ||
+		!strings.Contains(stdout.String(), filepath.Join(".claude", "skills", "moss")) {
 		t.Fatalf("installer output stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if _, err := os.Stat(filepath.Join(project, ".codex", "skills", "cairn", "SKILL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(project, ".codex", "skills", "moss", "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(project, ".claude", "skills", "cairn", "SKILL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(project, ".claude", "skills", "moss", "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -91,7 +91,7 @@ func TestMachineHelpDoesNotRenderUsage(t *testing.T) {
 
 func TestCallDispatchesToApplication(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CAIRN_DATA_DIR", filepath.Join(dir, "data"))
+	t.Setenv("MOSS_DATA_DIR", filepath.Join(dir, "data"))
 	requestPath := filepath.Join(dir, "request.json")
 	responsePath := filepath.Join(dir, "response.json")
 	request := protocol.Request{

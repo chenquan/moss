@@ -8,22 +8,22 @@ TBD - created by archiving change cairn-spec-baseline. Update Purpose after arch
 
 #### Scenario: New source
 - **WHEN** a readable regular file is ingested with a supported source type and sensitivity
-- **THEN** Cairn stores an immutable Raw Blob, creates a Source record, and returns `source_id`, `content_hash`, and `duplicate: false`
+- **THEN** Moss stores an immutable Raw Blob, creates a Source record, and returns `source_id`, `content_hash`, and `duplicate: false`
 
 #### Scenario: Unsupported filesystem object
 - **WHEN** the input path is a directory, device, socket, or rejected symlink
-- **THEN** Cairn returns `SOURCE_INPUT_INVALID` and leaves Raw storage and SQLite unchanged
+- **THEN** Moss returns `SOURCE_INPUT_INVALID` and leaves Raw storage and SQLite unchanged
 
 ### Requirement: Blob deduplication and source context
-Cairn SHALL deduplicate identical bytes by SHA-256 while preserving separate Source records when distinct ingestion requests carry different origin context.
+Moss SHALL deduplicate identical bytes by SHA-256 while preserving separate Source records when distinct ingestion requests carry different origin context.
 
 #### Scenario: Same content ingested twice
 - **WHEN** two valid source records contain identical bytes
-- **THEN** Cairn stores one Blob, returns `duplicate: true` for the later ingestion, and preserves both valid Source references when their request identities differ
+- **THEN** Moss stores one Blob, returns `duplicate: true` for the later ingestion, and preserves both valid Source references when their request identities differ
 
 #### Scenario: Same idempotency key retried
 - **WHEN** the same ingestion request is retried with its original idempotency key
-- **THEN** Cairn returns the original Source result and does not create a second Source record
+- **THEN** Moss returns the original Source result and does not create a second Source record
 
 ### Requirement: Source metadata retrieval
 `source.get` SHALL return source metadata, hash, size, source type, sensitivity, and creation information without exposing the complete content unless an explicit managed content materialization option is requested.
@@ -41,9 +41,9 @@ Cairn SHALL deduplicate identical bytes by SHA-256 while preserving separate Sou
 
 #### Scenario: List normal sources
 - **WHEN** a caller requests a source list without a sensitive-content permission in the request policy
-- **THEN** Cairn returns only permitted metadata in stable creation-time/ID order
+- **THEN** Moss returns only permitted metadata in stable creation-time/ID order
 
 #### Scenario: Empty result
 - **WHEN** no source matches the requested filter
-- **THEN** Cairn returns an empty list with `ok: true`
+- **THEN** Moss returns an empty list with `ok: true`
 

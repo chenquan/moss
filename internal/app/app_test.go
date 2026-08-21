@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"cairn/internal/protocol"
-	"cairn/internal/storage"
+	"moss/internal/protocol"
+	"moss/internal/storage"
 )
 
 func TestSystemHandshakeAndHealth(t *testing.T) {
@@ -140,7 +140,7 @@ func TestSystemExportRestoreAndIdempotency(t *testing.T) {
 func TestSourceCaptureDeduplicatesAndIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	input := filepath.Join(dir, "notes.md")
-	content := []byte("Cairn source content\n")
+	content := []byte("Moss source content\n")
 	if err := os.WriteFile(input, content, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func TestCompilePreviewApplyAndUndo(t *testing.T) {
 			}
 		case "write":
 			result = map[string]any{
-				"title": "Local execution decision", "slug": "local-execution-decision", "summary": "Why the assistant runs locally.", "body": "The assistant is driven by a local Claude Skill and an internal CLI.", "sensitivity": "normal", "tags": []string{"architecture", "cairn"}, "source_ids": []string{sourceID}, "citations": []any{map[string]any{"source_id": sourceID, "locator": "line 1"}},
+				"title": "Local execution decision", "slug": "local-execution-decision", "summary": "Why the assistant runs locally.", "body": "The assistant is driven by a local Claude Skill and an internal CLI.", "sensitivity": "normal", "tags": []string{"architecture", "moss"}, "source_ids": []string{sourceID}, "citations": []any{map[string]any{"source_id": sourceID, "locator": "line 1"}},
 			}
 		}
 		payload, err := json.Marshal(result)

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"unicode"
 
-	"cairn/internal/protocol"
-	"cairn/internal/storage"
+	"moss/internal/protocol"
+	"moss/internal/storage"
 )
 
 const maxArticleBytes = 2 << 20

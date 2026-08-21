@@ -132,7 +132,7 @@ func resolveDestination(target, scope string, options InstallOptions) (string, e
 		if err != nil {
 			return "", fmt.Errorf("resolve project directory: %w", err)
 		}
-		return filepath.Join(projectDir, "."+target, "skills", "cairn"), nil
+		return filepath.Join(projectDir, "."+target, "skills", "moss"), nil
 	}
 
 	homeDir := options.HomeDir
@@ -148,7 +148,7 @@ func resolveDestination(target, scope string, options InstallOptions) (string, e
 		return "", fmt.Errorf("resolve user home: %w", err)
 	}
 	if target == TargetClaude {
-		return filepath.Join(homeDir, ".claude", "skills", "cairn"), nil
+		return filepath.Join(homeDir, ".claude", "skills", "moss"), nil
 	}
 	codexHome := options.CodexHome
 	if codexHome == "" {
@@ -161,7 +161,7 @@ func resolveDestination(target, scope string, options InstallOptions) (string, e
 	if err != nil {
 		return "", fmt.Errorf("resolve Codex home: %w", err)
 	}
-	return filepath.Join(codexHome, "skills", "cairn"), nil
+	return filepath.Join(codexHome, "skills", "moss"), nil
 }
 
 func loadAssets() ([]assetFile, error) {
@@ -248,7 +248,7 @@ func writeAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create Skill directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".cairn-skill-*")
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".moss-skill-*")
 	if err != nil {
 		return fmt.Errorf("create temporary Skill file: %w", err)
 	}

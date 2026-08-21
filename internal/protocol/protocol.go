@@ -184,10 +184,10 @@ func SupportedCapabilities() []Capability {
 		{Operation: "compile.start", Mutating: true, Description: "Start a staged source compilation job"},
 		{Operation: "compile.status", Description: "Read compile job status"},
 		{Operation: "compile.submit", Mutating: true, Description: "Submit a validated compile stage result"},
-		{Operation: "system.capabilities", Description: "List supported Cairn operations"},
+		{Operation: "system.capabilities", Description: "List supported Moss operations"},
 		{Operation: "system.export", Mutating: true, Description: "Create a private local backup archive"},
 		{Operation: "system.handshake", Description: "Check Skill and CLI protocol compatibility"},
-		{Operation: "system.health", Description: "Validate local Cairn storage and runtime health"},
+		{Operation: "system.health", Description: "Validate local Moss storage and runtime health"},
 		{Operation: "system.restore", Mutating: true, Description: "Restore a confirmed local backup archive"},
 		{Operation: "plan.apply", Mutating: true, Description: "Apply a reviewed knowledge plan"},
 		{Operation: "plan.inspect", Description: "Inspect a knowledge plan"},
@@ -219,7 +219,7 @@ func WriteResponse(path string, response Response) error {
 		return NewCodedError("RESPONSE_TOO_LARGE", "response exceeds the maximum size", false, nil)
 	}
 	parent := filepath.Dir(path)
-	tmp, err := os.CreateTemp(parent, ".cairn-response-*")
+	tmp, err := os.CreateTemp(parent, ".moss-response-*")
 	if err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func ValidateResponsePath(path, requestPath, dataRoot string) error {
 	}
 	allowed := within(resolvedParent, requestRoot) || within(resolvedParent, dataRoot)
 	if !allowed {
-		return NewCodedError("PATH_INVALID", "response path is outside the request or Cairn managed directory", false, nil)
+		return NewCodedError("PATH_INVALID", "response path is outside the request or Moss managed directory", false, nil)
 	}
 	if existing, err := os.Lstat(path); err == nil && existing.Mode()&os.ModeSymlink != 0 {
 		return NewCodedError("PATH_INVALID", "response path must not be a symlink", false, nil)

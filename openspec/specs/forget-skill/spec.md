@@ -4,7 +4,7 @@
 TBD - created by archiving change cairn-safe-forget. Update Purpose after archive.
 ## Requirements
 ### Requirement: Confirm high-impact forget and rollback in Claude
-The Cairn Skill SHALL show the complete impact of forget/rollback plans and require explicit user confirmation before calling `plan.apply`, while keeping the CLI invisible.
+The Moss Skill SHALL show the complete impact of forget/rollback plans and require explicit user confirmation before calling `plan.apply`, while keeping the CLI invisible.
 
 #### Scenario: User asks to forget a project
 - **WHEN** the user asks Claude to forget all information about a project

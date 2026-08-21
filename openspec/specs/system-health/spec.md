@@ -7,7 +7,7 @@ TBD - created by archiving change cairn-spec-baseline. Update Purpose after arch
 `system.handshake` SHALL report the CLI version, supported protocol range, Skill compatibility, and supported operation names without changing user data.
 
 #### Scenario: Compatible Skill
-- **WHEN** the actor identifies a compatible Cairn Skill version
+- **WHEN** the actor identifies a compatible Moss Skill version
 - **THEN** the response reports `ok: true` and the negotiated protocol information
 
 #### Scenario: Incompatible Skill

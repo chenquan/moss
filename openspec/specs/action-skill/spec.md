@@ -4,7 +4,7 @@
 TBD - created by archiving change cairn-spec-baseline. Update Purpose after archive.
 ## Requirements
 ### Requirement: Route action requests through the Skill
-The Cairn Skill SHALL route action capture and daily-progress questions through action plans, `action.apply`, and `action.query` while keeping all CLI details internal.
+The Moss Skill SHALL route action capture and daily-progress questions through action plans, `action.apply`, and `action.query` while keeping all CLI details internal.
 
 #### Scenario: User asks to remember a task
 - **WHEN** the user asks Claude to remember a task, commitment, or reminder

@@ -1,4 +1,4 @@
-module cairn
+module moss
 
 go 1.23
 

@@ -1,17 +1,25 @@
-# cairn-skill Specification
+# moss-skill Specification
 
 ## Purpose
 TBD - created by archiving change cairn-spec-baseline. Update Purpose after archive.
 ## Requirements
-### Requirement: Natural-language-only Skill routing
-The shipped Cairn Skill SHALL be automatically available to Claude Code, SHALL be hidden from the user's slash-command menu, and SHALL instruct Claude to route supported capture and maintenance requests through `cairn call` rather than presenting a human CLI.
+### Requirement: Explicit-name Skill routing
+The shipped Moss Skill SHALL be available to Claude Code, SHALL be hidden from the user's slash-command menu, and SHALL activate only when the user's current message explicitly addresses Moss by name. It SHALL route supported capture and maintenance requests through `moss call` rather than presenting a human CLI.
+
+#### Scenario: User explicitly addresses Moss
+- **WHEN** a user says “Moss，记住这份资料” or otherwise addresses Moss by name in the current message
+- **THEN** the Skill activates and routes the requested workflow through the machine protocol
+
+#### Scenario: Generic request does not activate Moss
+- **WHEN** a user asks to remember, search, organize, or check something without addressing Moss by name
+- **THEN** the Skill does not invoke the Moss binary or claim to have handled the request
 
 #### Scenario: Capture request
 - **WHEN** a user asks Claude to remember a local document
 - **THEN** the Skill prepares a file-based request, invokes `source.ingest`, reads the response file, and reports the result in natural language
 
 #### Scenario: Maintenance request
-- **WHEN** a user asks whether Cairn is installed or healthy
+- **WHEN** a user asks whether Moss is installed or healthy
 - **THEN** the Skill invokes `system.handshake` and `system.health` and explains the structured result without exposing shell command details
 
 ### Requirement: Content-safe invocation
@@ -29,15 +37,15 @@ The Skill SHALL pass only file paths and machine arguments to the CLI, SHALL nev
 The Skill SHALL perform a handshake before relying on capabilities and SHALL stop with an actionable compatibility message when the CLI is missing or incompatible.
 
 #### Scenario: Missing binary
-- **WHEN** the configured `cairn` executable cannot be invoked
-- **THEN** the Skill reports that Cairn is not installed or needs repair and does not claim that data was stored
+- **WHEN** the configured `moss` executable cannot be invoked
+- **THEN** the Skill reports that Moss is not installed or needs repair and does not claim that data was stored
 
 #### Scenario: Unsupported operation
 - **WHEN** capability discovery does not include an operation needed by a workflow
 - **THEN** the Skill stops that workflow and reports the unavailable capability without falling back to an unrelated command
 
 ### Requirement: Skill invocation survives the Cobra entrypoint migration
-The Cairn Skill SHALL continue invoking the installed binary with exactly `cairn call --request <request-file> --response <response-file>` after the Cobra layout migration, without depending on source-tree paths or generated human help.
+The Moss Skill SHALL continue invoking the installed binary with exactly `moss call --request <request-file> --response <response-file>` after the Cobra layout migration, without depending on source-tree paths or generated human help.
 
 #### Scenario: Installed binary invocation
 - **WHEN** Claude Code routes a capture, compile, retrieval, action, or maintenance workflow
@@ -48,7 +56,7 @@ The Cairn Skill SHALL continue invoking the installed binary with exactly `cairn
 - **THEN** the Skill treats the runtime as incompatible and does not claim that the requested operation succeeded
 
 ### Requirement: Operation-level model guidance
-The shipped Cairn Skill SHALL provide Claude Code with one authoritative operation-level guide that maps user intent to protocol operations, identifies required arguments and mutation/confirmation rules, and defines response, retry, resume, and prompt-injection handling without exposing CLI syntax to the user.
+The shipped Moss Skill SHALL provide Claude Code with one authoritative operation-level guide that maps user intent to protocol operations, identifies required arguments and mutation/confirmation rules, and defines response, retry, resume, and prompt-injection handling without exposing CLI syntax to the user.
 
 #### Scenario: Model routes a capture request
 - **WHEN** a user asks Claude to remember a local document

@@ -1,4 +1,4 @@
-# Cairn machine protocol
+# Moss machine protocol
 
 This file defines the process boundary. Use [operation-guide.md](operation-guide.md) for model routing and argument details.
 
@@ -6,11 +6,11 @@ This file defines the process boundary. Use [operation-guide.md](operation-guide
 
 The only runtime entrypoint is:
 
-`cairn call --request <request-file> --response <response-file>`
+`moss call --request <request-file> --response <response-file>`
 
 The Skill is the only user interface. The CLI has no human command set, interactive prompts, Web UI, MCP integration, or answer-generation model.
 
-By default, the runtime stores the SQLite database and managed files under `.cairn` in the current user's home directory (`~/.cairn`). `CAIRN_DATA_DIR` may override that root for controlled runtime setup or testing.
+By default, the runtime stores the SQLite database and managed files under `.cairn` in the current user's home directory (`~/.cairn`) for upgrade compatibility. `MOSS_DATA_DIR` may override that root; `CAIRN_DATA_DIR` remains a legacy alias for controlled runtime setup or testing.
 
 - Requests and responses are JSON files.
 - Do not put user content in shell arguments.

@@ -4,8 +4,8 @@ import (
 	"context"
 	"sort"
 
-	"cairn/internal/protocol"
-	"cairn/internal/storage"
+	"moss/internal/protocol"
+	"moss/internal/storage"
 )
 
 const (
@@ -64,7 +64,7 @@ func Health(ctx context.Context, store *storage.Storage) (any, *protocol.CodedEr
 		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "health checks could not complete", true, nil)
 	}
 	if result.Overall != "healthy" {
-		return result, protocol.NewCodedError("STORAGE_UNHEALTHY", "one or more Cairn health checks failed", true, result)
+		return result, protocol.NewCodedError("STORAGE_UNHEALTHY", "one or more Moss health checks failed", true, result)
 	}
 	return result, nil
 }

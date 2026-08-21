@@ -4,10 +4,10 @@
 TBD - created by archiving change cairn-spec-baseline. Update Purpose after archive.
 ## Requirements
 ### Requirement: File-based call contract
-The Cairn CLI SHALL expose a machine-only `call` entrypoint that requires a request file and a response file, SHALL parse the complete request before mutation, and SHALL never enter an interactive mode.
+The Moss CLI SHALL expose a machine-only `call` entrypoint that requires a request file and a response file, SHALL parse the complete request before mutation, and SHALL never enter an interactive mode.
 
 #### Scenario: Valid request is executed
-- **WHEN** the caller invokes `cairn call` with readable request and writable response paths containing a supported protocol request
+- **WHEN** the caller invokes `moss call` with readable request and writable response paths containing a supported protocol request
 - **THEN** the CLI executes exactly the requested operation and writes one complete response document
 
 #### Scenario: Missing protocol fields are rejected
@@ -48,7 +48,7 @@ The CLI SHALL write responses through an atomic replacement, SHALL leave stdout 
 - **THEN** the CLI writes `ok: false` and a stable error object to the response file rather than printing business data to stdout
 
 ### Requirement: Managed path safety
-The CLI SHALL reject traversal, symlink escapes, non-regular request files, and response destinations outside the caller-approved managed request directory or Cairn data root.
+The CLI SHALL reject traversal, symlink escapes, non-regular request files, and response destinations outside the caller-approved managed request directory or Moss data root.
 
 #### Scenario: Traversal attempt
 - **WHEN** a request references `../` to escape its managed directory
@@ -70,10 +70,10 @@ The CLI capability response SHALL include `compile.start`, `compile.next`, `comp
 - **THEN** the CLI returns `IDEMPOTENCY_REQUIRED` before dispatching the operation
 
 ### Requirement: Cobra-backed machine command boundary
-The Cairn executable SHALL expose a machine-only `call` entrypoint using the file-based protocol while allowing the explicit human-facing setup command `skill install`; all knowledge, source, action, plan, and system business operations SHALL remain behind `call`, and `call` SHALL require `--request` and `--response` file paths, reject positional arguments, and preserve the existing file-based protocol semantics.
+The Moss executable SHALL expose a machine-only `call` entrypoint using the file-based protocol while allowing the explicit human-facing setup command `skill install`; all knowledge, source, action, plan, and system business operations SHALL remain behind `call`, and `call` SHALL require `--request` and `--response` file paths, reject positional arguments, and preserve the existing file-based protocol semantics.
 
 #### Scenario: Valid call through Cobra
-- **WHEN** the caller invokes `cairn call --request <file> --response <file>` with valid paths
+- **WHEN** the caller invokes `moss call --request <file> --response <file>` with valid paths
 - **THEN** Cobra dispatches to the existing application executor, which writes the complete JSON response atomically and leaves stdout empty
 
 #### Scenario: Missing or extra command arguments

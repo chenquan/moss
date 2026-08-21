@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"cairn/internal/protocol"
+	"moss/internal/protocol"
 )
 
-func TestCairnSkillIsMachineOnlyAndRoutesProtocol(t *testing.T) {
+func TestMossSkillIsExplicitOnlyAndRoutesProtocol(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate test file")
@@ -22,12 +22,12 @@ func TestCairnSkillIsMachineOnlyAndRoutesProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(content)
-	for _, required := range []string{"name: cairn", "user-invocable: false", "cairn call", "system.handshake", "source.ingest", "source.mark_sensitive", "system.health", "system.export", "system.restore", "compile.start", "compile.next", "compile.submit", "compile.status", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.inspect", "plan.undo", "confirmed: true", "knowledge.catalog", "knowledge.candidates", "knowledge.materialize", "knowledge.history", "knowledge.rollback.plan", "source.forget.plan", "audit.query", "WIKI_DRIFT", "SENSITIVITY_DENIED", "action.create.plan", "action.update.plan", "action.apply", "action.query"} {
+	for _, required := range []string{"name: moss", "user-invocable: false", "explicitly addresses Moss", "moss call", "system.handshake", "source.ingest", "source.mark_sensitive", "system.health", "system.export", "system.restore", "compile.start", "compile.next", "compile.submit", "compile.status", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.inspect", "plan.undo", "confirmed: true", "knowledge.catalog", "knowledge.candidates", "knowledge.materialize", "knowledge.history", "knowledge.rollback.plan", "source.forget.plan", "audit.query", "WIKI_DRIFT", "SENSITIVITY_DENIED", "action.create.plan", "action.update.plan", "action.apply", "action.query"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("Skill missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"cairn-cli", "assistant today", "assistant search", "assistant wiki list", "assistant commitment add", "assistant compile preview"} {
+	for _, forbidden := range []string{"cairn-cli", "cairn call", "name: cairn", "assistant today", "assistant search", "assistant wiki list", "assistant commitment add", "assistant compile preview"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("Skill contains removed human CLI wording %q", forbidden)
 		}

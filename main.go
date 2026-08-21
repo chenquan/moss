@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"cairn/cmd"
+	"moss/cmd"
 )
 
 func main() {

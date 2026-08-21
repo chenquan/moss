@@ -3,8 +3,8 @@ package cmd
 import (
 	"io"
 
-	"cairn/internal/app"
 	"github.com/spf13/cobra"
+	"moss/internal/app"
 )
 
 func newCallCommand(stdout, stderr io.Writer) *cobra.Command {

@@ -1,10 +1,10 @@
-# Cairn maintenance workflow
+# Moss maintenance workflow
 
 The Skill is the only user interface. Keep installation, upgrade, backup, and restore inside Claude Code and invoke the local runtime only through the file-based `call` protocol.
 
 ## Bootstrap
 
-Use a trusted packaged `cairn` binary or a checked-out Cairn source tree. The user may install the matching Skill resources with `cairn skill install` (default: global Claude; use `--target codex` or `--scope project` when explicitly requested). To install both editor integrations, repeat the target flag, for example `cairn skill install --target codex --target claude`; do not use a combined `both` value. Install the binary separately through the trusted environment, then call `system.handshake` and `system.health`. Report compatibility or repair errors without claiming readiness.
+Use a trusted packaged `moss` binary or a checked-out Moss source tree. The user may install the matching Skill resources with `moss skill install` (default: global Claude; use `--target codex` or `--scope project` when explicitly requested). To install both editor integrations, repeat the target flag, for example `moss skill install --target codex --target claude`; do not use a combined `both` value. Install the binary separately through the trusted environment, then call `system.handshake` and `system.health`. Report compatibility or repair errors without claiming readiness.
 
 ## Upgrade
 

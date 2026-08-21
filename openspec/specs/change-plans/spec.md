@@ -8,7 +8,7 @@ TBD - created by archiving change cairn-spec-baseline. Update Purpose after arch
 
 #### Scenario: Preview new article
 - **WHEN** a preview-ready job has a valid write result
-- **THEN** Cairn returns a plan ID, a new-article diff, affected source IDs, and no Markdown mutation
+- **THEN** Moss returns a plan ID, a new-article diff, affected source IDs, and no Markdown mutation
 
 #### Scenario: Preview conflict or sensitive content
 - **WHEN** preview detects an existing article, overwrite, conflict, or sensitive content
@@ -27,20 +27,20 @@ TBD - created by archiving change cairn-spec-baseline. Update Purpose after arch
 
 #### Scenario: Stale or drifted plan
 - **WHEN** the article version changes, the Wiki hash differs, or a plan expires before its gateway is called
-- **THEN** Cairn returns `PLAN_STALE`, `WIKI_DRIFT`, or the corresponding expiry error and performs no write
+- **THEN** Moss returns `PLAN_STALE`, `WIKI_DRIFT`, or the corresponding expiry error and performs no write
 
 #### Scenario: Repeated apply
 - **WHEN** an applied plan is submitted again with the same idempotency key to its gateway
-- **THEN** Cairn returns the original apply response without duplicating the article version or safety effect
+- **THEN** Moss returns the original apply response without duplicating the article version or safety effect
 
 ### Requirement: Undo only the plan's own change
 `plan.undo` SHALL restore the immediately prior managed version or remove a newly created article only when the current file and version still match the target plan's output.
 
 #### Scenario: Undo an unchanged applied plan
 - **WHEN** the plan is applied and the article has not changed since that application
-- **THEN** Cairn restores the previous version or moves the new article to managed trash and marks the plan undone
+- **THEN** Moss restores the previous version or moves the new article to managed trash and marks the plan undone
 
 #### Scenario: Undo after later edit
 - **WHEN** the article changed after the target plan was applied
-- **THEN** Cairn returns `PLAN_STALE` and leaves the article untouched
+- **THEN** Moss returns `PLAN_STALE` and leaves the article untouched
 

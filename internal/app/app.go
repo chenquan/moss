@@ -9,14 +9,14 @@ import (
 	"os"
 	"strings"
 
-	"cairn/internal/action"
-	"cairn/internal/compile"
-	"cairn/internal/knowledge"
-	"cairn/internal/protocol"
-	"cairn/internal/safety"
-	"cairn/internal/source"
-	"cairn/internal/storage"
-	"cairn/internal/system"
+	"moss/internal/action"
+	"moss/internal/compile"
+	"moss/internal/knowledge"
+	"moss/internal/protocol"
+	"moss/internal/safety"
+	"moss/internal/source"
+	"moss/internal/storage"
+	"moss/internal/system"
 )
 
 const (
@@ -273,7 +273,7 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 func openStorage(ctx context.Context) (*storage.Storage, *protocol.CodedError) {
 	store, err := storage.Open(ctx)
 	if err != nil {
-		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "Cairn storage could not be opened", true, nil)
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "Moss storage could not be opened", true, nil)
 	}
 	return store, nil
 }
@@ -285,10 +285,10 @@ func openMutableStorage(ctx context.Context) (*storage.Storage, *protocol.CodedE
 	}
 	if health, err := store.Health(ctx); err != nil {
 		_ = store.Close()
-		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "Cairn health checks could not complete", true, nil)
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "Moss health checks could not complete", true, nil)
 	} else if health.Overall != "healthy" {
 		_ = store.Close()
-		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "mutating operations are unavailable until Cairn storage is healthy", true, health)
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "mutating operations are unavailable until Moss storage is healthy", true, health)
 	}
 	return store, nil
 }

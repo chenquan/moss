@@ -48,7 +48,7 @@ func TestInstallDefaultsToGlobalClaude(t *testing.T) {
 	if len(results) != 1 || results[0].Target != TargetClaude || results[0].Scope != ScopeGlobal {
 		t.Fatalf("results = %+v", results)
 	}
-	expected := filepath.Join(home, ".claude", "skills", "cairn", "SKILL.md")
+	expected := filepath.Join(home, ".claude", "skills", "moss", "SKILL.md")
 	if _, err := os.Stat(expected); err != nil {
 		t.Fatalf("default Skill missing at %s: %v", expected, err)
 	}
@@ -67,7 +67,7 @@ func TestInstallProjectCodexAndRepeatedGlobalTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Destination != filepath.Join(project, ".codex", "skills", "cairn") {
+	if len(results) != 1 || results[0].Destination != filepath.Join(project, ".codex", "skills", "moss") {
 		t.Fatalf("project result = %+v", results)
 	}
 
@@ -83,8 +83,8 @@ func TestInstallProjectCodexAndRepeatedGlobalTargets(t *testing.T) {
 		t.Fatalf("target order = %+v", results)
 	}
 	for _, path := range []string{
-		filepath.Join(home, ".claude", "skills", "cairn", "SKILL.md"),
-		filepath.Join(codexHome, "skills", "cairn", "SKILL.md"),
+		filepath.Join(home, ".claude", "skills", "moss", "SKILL.md"),
+		filepath.Join(codexHome, "skills", "moss", "SKILL.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("target Skill missing at %s: %v", path, err)
@@ -109,7 +109,7 @@ func TestInstallConflictRequiresForceAndPreservesUnrelatedFiles(t *testing.T) {
 	if _, err := Install(options); err != nil {
 		t.Fatal(err)
 	}
-	destination := filepath.Join(project, ".claude", "skills", "cairn")
+	destination := filepath.Join(project, ".claude", "skills", "moss")
 	skillPath := filepath.Join(destination, "SKILL.md")
 	if err := os.WriteFile(skillPath, []byte("user edit"), 0600); err != nil {
 		t.Fatal(err)

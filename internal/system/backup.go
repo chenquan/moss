@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"cairn/internal/protocol"
-	"cairn/internal/storage"
+	"moss/internal/protocol"
+	"moss/internal/storage"
 )
 
 const (
@@ -68,7 +68,7 @@ type extractedBackup struct {
 	Stage    string
 }
 
-// Export creates a private, content-addressed snapshot of Cairn's durable state.
+// Export creates a private, content-addressed snapshot of Moss's durable state.
 func Export(ctx context.Context, store *storage.Storage, req protocol.Request) (protocol.Response, *protocol.CodedError) {
 	args, codedErr := protocol.DecodeArguments[exportArguments](req)
 	if codedErr != nil {
