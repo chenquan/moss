@@ -1,6 +1,7 @@
 # 二进制
 xmind-server
 xmind
+/cairn
 cairn-cli
 *.exe
 *.dll

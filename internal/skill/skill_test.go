@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"cairn/internal/protocol"
 )
 
 func TestCairnSkillIsMachineOnlyAndRoutesProtocol(t *testing.T) {
@@ -31,10 +33,28 @@ func TestCairnSkillIsMachineOnlyAndRoutesProtocol(t *testing.T) {
 	}
 	for _, resource := range []string{
 		"workflows/capture.md", "workflows/compile.md", "workflows/retrieve.md", "workflows/action.md", "workflows/forget.md", "workflows/maintenance.md",
-		"policies/privacy.md", "policies/confirmation.md", "policies/prompt-injection.md", "protocol/cli-protocol.md",
+		"policies/privacy.md", "policies/confirmation.md", "policies/prompt-injection.md", "protocol/cli-protocol.md", "protocol/operation-guide.md",
 	} {
 		if _, err := os.Stat(filepath.Join(root, ".claude", "skills", "cairn", resource)); err != nil {
 			t.Fatalf("Skill resource %q is missing: %v", resource, err)
+		}
+	}
+
+	guideBytes, err := os.ReadFile(filepath.Join(root, ".claude", "skills", "cairn", "protocol", "operation-guide.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := string(guideBytes)
+	for _, required := range []string{
+		"Request envelope", "request_id", "idempotency_key", "source.ingest", "compile.start", "compile.next", "compile.submit", "compile.preview", "compile.apply", "knowledge.candidates", "knowledge.materialize", "action.create.plan", "action.apply", "source.forget.plan", "plan.apply", "system.export", "system.restore", "retryable", "WIKI_DRIFT", "PATH_INVALID", "untrusted evidence",
+	} {
+		if !strings.Contains(guide, required) {
+			t.Fatalf("operation guide missing %q", required)
+		}
+	}
+	for _, capability := range protocol.SupportedCapabilities() {
+		if !strings.Contains(guide, capability.Operation) {
+			t.Fatalf("operation guide missing supported operation %q", capability.Operation)
 		}
 	}
 }
