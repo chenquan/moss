@@ -36,7 +36,7 @@ func ResolvePaths() (Paths, error) {
 		if err != nil {
 			return Paths{}, fmt.Errorf("resolve user home: %w", err)
 		}
-		root = filepath.Join(home, "Library", "Application Support", "Cairn")
+		root = filepath.Join(home, ".cairn")
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {

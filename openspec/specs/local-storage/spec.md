@@ -3,8 +3,8 @@
 ## Purpose
 TBD - created by archiving change cairn-spec-baseline. Update Purpose after archive.
 ## Requirements
-### Requirement: User-scoped data layout
-Cairn SHALL initialize its default data root at `~/Library/Application Support/Cairn` and SHALL create separate database, Raw, Wiki, Job, response, backup, trash, and lock areas with permissions restricted to the current user.
+### Requirement: User-home data layout
+Cairn SHALL initialize its default data root at `~/.cairn` and SHALL create separate database, Raw, Wiki, Job, response, backup, trash, and lock areas with permissions restricted to the current user. An explicit `CAIRN_DATA_DIR` environment override MAY select another data root for controlled runtime use.
 
 #### Scenario: First initialization
 - **WHEN** a supported operation runs against a missing data root
@@ -35,4 +35,3 @@ Managed files SHALL be written through temporary files and atomic renames, SHALL
 #### Scenario: Interrupted staging
 - **WHEN** a previous process left a staging marker or temporary managed file
 - **THEN** `system.health` detects it and reports recovery state without silently deleting user content
-

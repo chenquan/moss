@@ -10,6 +10,8 @@ The only runtime entrypoint is:
 
 The Skill is the only user interface. The CLI has no human command set, interactive prompts, Web UI, MCP integration, or answer-generation model.
 
+By default, the runtime stores the SQLite database and managed files under `.cairn` in the current user's home directory (`~/.cairn`). `CAIRN_DATA_DIR` may override that root for controlled runtime setup or testing.
+
 - Requests and responses are JSON files.
 - Do not put user content in shell arguments.
 - `stdout` carries no business data.
