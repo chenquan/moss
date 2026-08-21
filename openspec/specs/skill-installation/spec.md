@@ -4,18 +4,18 @@
 TBD - created by archiving change cairn-skill-install-command. Update Purpose after archive.
 ## Requirements
 ### Requirement: Install bundled Skill resources
-The project SHALL provide a `cairn-cli skill install` command that installs the bundled Cairn Skill resources for Claude Code or Codex, with `--scope global|project` defaulting to `global`, a repeatable `--target claude|codex` flag defaulting to `claude`, and a human-readable result that reports each resolved destination.
+The project SHALL provide a `cairn skill install` command that installs the bundled Cairn Skill resources for Claude Code or Codex, with `--scope global|project` defaulting to `global`, a repeatable `--target claude|codex` flag defaulting to `claude`, and a human-readable result that reports each resolved destination.
 
 #### Scenario: Default global Claude installation
-- **WHEN** a user runs `cairn-cli skill install` with no target or scope flags
+- **WHEN** a user runs `cairn skill install` with no target or scope flags
 - **THEN** the command installs the bundled Skill under the user's global Claude skill directory and reports the destination
 
 #### Scenario: Project Codex installation
-- **WHEN** a user runs `cairn-cli skill install --target codex --scope project` from a project directory
+- **WHEN** a user runs `cairn skill install --target codex --scope project` from a project directory
 - **THEN** the command installs the bundled Skill under `<project>/.codex/skills/cairn`
 
 #### Scenario: Multiple repeated targets
-- **WHEN** a user runs `cairn-cli skill install --target codex --target claude`
+- **WHEN** a user runs `cairn skill install --target codex --target claude`
 - **THEN** the command installs equivalent bundled resources into both target directories and reports each result once in the requested order
 
 #### Scenario: Duplicate target values
@@ -47,4 +47,3 @@ The installer SHALL use the versioned Skill resources bundled in the binary and 
 #### Scenario: Installed binary outside checkout
 - **WHEN** a user invokes the installer from a directory without the Cairn source tree
 - **THEN** the command still installs the complete Skill resource tree from the binary bundle
-

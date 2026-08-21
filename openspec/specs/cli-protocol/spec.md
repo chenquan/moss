@@ -7,7 +7,7 @@ TBD - created by archiving change cairn-spec-baseline. Update Purpose after arch
 The Cairn CLI SHALL expose a machine-only `call` entrypoint that requires a request file and a response file, SHALL parse the complete request before mutation, and SHALL never enter an interactive mode.
 
 #### Scenario: Valid request is executed
-- **WHEN** the caller invokes `cairn-cli call` with readable request and writable response paths containing a supported protocol request
+- **WHEN** the caller invokes `cairn call` with readable request and writable response paths containing a supported protocol request
 - **THEN** the CLI executes exactly the requested operation and writes one complete response document
 
 #### Scenario: Missing protocol fields are rejected
@@ -73,7 +73,7 @@ The CLI capability response SHALL include `compile.start`, `compile.next`, `comp
 The Cairn executable SHALL expose a machine-only `call` entrypoint using the file-based protocol while allowing the explicit human-facing setup command `skill install`; all knowledge, source, action, plan, and system business operations SHALL remain behind `call`, and `call` SHALL require `--request` and `--response` file paths, reject positional arguments, and preserve the existing file-based protocol semantics.
 
 #### Scenario: Valid call through Cobra
-- **WHEN** the caller invokes `cairn-cli call --request <file> --response <file>` with valid paths
+- **WHEN** the caller invokes `cairn call --request <file> --response <file>` with valid paths
 - **THEN** Cobra dispatches to the existing application executor, which writes the complete JSON response atomically and leaves stdout empty
 
 #### Scenario: Missing or extra command arguments
@@ -83,4 +83,3 @@ The Cairn executable SHALL expose a machine-only `call` entrypoint using the fil
 #### Scenario: Human-oriented surface remains limited
 - **WHEN** the caller requests help, completion, suggestions, or a command other than the explicit Skill installer
 - **THEN** the executable does not expose a human business workflow; only `skill install` may produce setup-oriented human output
-

@@ -4,7 +4,7 @@
 TBD - created by archiving change cairn-spec-baseline. Update Purpose after archive.
 ## Requirements
 ### Requirement: Natural-language-only Skill routing
-The shipped Cairn Skill SHALL be automatically available to Claude Code, SHALL be hidden from the user's slash-command menu, and SHALL instruct Claude to route supported capture and maintenance requests through `cairn-cli call` rather than presenting a human CLI.
+The shipped Cairn Skill SHALL be automatically available to Claude Code, SHALL be hidden from the user's slash-command menu, and SHALL instruct Claude to route supported capture and maintenance requests through `cairn call` rather than presenting a human CLI.
 
 #### Scenario: Capture request
 - **WHEN** a user asks Claude to remember a local document
@@ -29,7 +29,7 @@ The Skill SHALL pass only file paths and machine arguments to the CLI, SHALL nev
 The Skill SHALL perform a handshake before relying on capabilities and SHALL stop with an actionable compatibility message when the CLI is missing or incompatible.
 
 #### Scenario: Missing binary
-- **WHEN** the configured `cairn-cli` executable cannot be invoked
+- **WHEN** the configured `cairn` executable cannot be invoked
 - **THEN** the Skill reports that Cairn is not installed or needs repair and does not claim that data was stored
 
 #### Scenario: Unsupported operation
@@ -37,7 +37,7 @@ The Skill SHALL perform a handshake before relying on capabilities and SHALL sto
 - **THEN** the Skill stops that workflow and reports the unavailable capability without falling back to an unrelated command
 
 ### Requirement: Skill invocation survives the Cobra entrypoint migration
-The Cairn Skill SHALL continue invoking the installed binary with exactly `cairn-cli call --request <request-file> --response <response-file>` after the Cobra layout migration, without depending on source-tree paths or generated human help.
+The Cairn Skill SHALL continue invoking the installed binary with exactly `cairn call --request <request-file> --response <response-file>` after the Cobra layout migration, without depending on source-tree paths or generated human help.
 
 #### Scenario: Installed binary invocation
 - **WHEN** Claude Code routes a capture, compile, retrieval, action, or maintenance workflow
@@ -65,4 +65,3 @@ The shipped Cairn Skill SHALL provide Claude Code with one authoritative operati
 #### Scenario: Model applies a high-impact change
 - **WHEN** a plan or action requires confirmation
 - **THEN** the Skill guide directs Claude to show impact and risk in conversation, obtain explicit user confirmation, and only then send `confirmed: true`
-

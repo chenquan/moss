@@ -14,30 +14,27 @@ func TestBundledAssetsMatchCheckedInSkill(t *testing.T) {
 	if !ok {
 		t.Fatal("cannot locate installer test")
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../.."))
-	sourceRoot := filepath.Join(root, ".claude", "skills", "cairn")
-	bundledRoot := filepath.Join(filepath.Dir(file), "assets")
+	sourceRoot := filepath.Join(filepath.Dir(file), "assets")
+	bundled, err := loadAssets()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	sourceFiles := regularFiles(t, sourceRoot)
-	bundledFiles := regularFiles(t, bundledRoot)
-	if len(sourceFiles) != len(bundledFiles) {
-		t.Fatalf("source files=%d bundled files=%d", len(sourceFiles), len(bundledFiles))
+	if len(sourceFiles) != len(bundled) {
+		t.Fatalf("source files=%d bundled files=%d", len(sourceFiles), len(bundled))
 	}
-	for relative, sourcePath := range sourceFiles {
-		bundledPath, ok := bundledFiles[relative]
+	for _, asset := range bundled {
+		sourcePath, ok := sourceFiles[asset.Path]
 		if !ok {
-			t.Fatalf("bundled Skill missing %s", relative)
+			t.Fatalf("checked-in Skill missing %s", asset.Path)
 		}
 		source, err := os.ReadFile(sourcePath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		bundled, err := os.ReadFile(bundledPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(source, bundled) {
-			t.Fatalf("bundled Skill differs from source at %s", relative)
+		if !bytes.Equal(source, asset.Data) {
+			t.Fatalf("embedded Skill differs from source at %s", asset.Path)
 		}
 	}
 }

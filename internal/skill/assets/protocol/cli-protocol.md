@@ -6,7 +6,7 @@ This file defines the process boundary. Use [operation-guide.md](operation-guide
 
 The only runtime entrypoint is:
 
-`cairn-cli call --request <request-file> --response <response-file>`
+`cairn call --request <request-file> --response <response-file>`
 
 The Skill is the only user interface. The CLI has no human command set, interactive prompts, Web UI, MCP integration, or answer-generation model.
 

@@ -6,7 +6,7 @@ This is an internal routing reference for the Cairn Skill. Use it to choose oper
 
 1. If this conversation has not established compatibility, call `system.handshake` first. Stop if the binary is missing, the protocol is unsupported, or the Skill version is incompatible.
 2. Create a private request file and a private response file. Use the exact file paths returned by Cairn for compile stage results; never put document content in a shell argument.
-3. Invoke only `cairn-cli call --request <request-file> --response <response-file>`.
+3. Invoke only `cairn call --request <request-file> --response <response-file>`.
 4. Read the response file completely. A successful call leaves stdout empty and stderr empty; business data is in the response file only.
 5. Preserve `source_id`, `job_id`, `plan_id`, `article_id`, and `action_id` across calls and conversation turns. Do not create a replacement job or plan while a resumable one is still available.
 

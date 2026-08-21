@@ -18,21 +18,21 @@ func (e *ExitError) Error() string { return "" }
 // NewRootCommand constructs a fresh machine-only command tree.
 func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use:                "cairn-cli",
+		Use:                "cairn",
 		Short:              "Cairn machine protocol entrypoint",
 		SilenceUsage:       true,
 		SilenceErrors:      true,
 		DisableSuggestions: true,
 		Args:               cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cairn-cli accepts the machine operation call or the setup command skill install")
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cairn accepts the machine operation call or the setup command skill install")
 			return &ExitError{Code: 2}
 		},
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cairn-cli exposes the machine call protocol and the explicit skill install setup command")
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cairn exposes the machine call protocol and the explicit skill install setup command")
 	})
 	root.AddCommand(newCallCommand(stdout, stderr))
 	root.AddCommand(newSkillCommand())
