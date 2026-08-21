@@ -4,7 +4,7 @@
 TBD - created by archiving change cairn-skill-install-command. Update Purpose after archive.
 ## Requirements
 ### Requirement: Install bundled Skill resources
-The project SHALL provide a `cairn-cli skill install` command that installs the bundled Cairn Skill resources for Claude Code or Codex, with `--scope global|project` defaulting to `global`, `--target claude|codex|both` defaulting to `claude`, and a human-readable result that reports the resolved destination.
+The project SHALL provide a `cairn-cli skill install` command that installs the bundled Cairn Skill resources for Claude Code or Codex, with `--scope global|project` defaulting to `global`, a repeatable `--target claude|codex` flag defaulting to `claude`, and a human-readable result that reports each resolved destination.
 
 #### Scenario: Default global Claude installation
 - **WHEN** a user runs `cairn-cli skill install` with no target or scope flags
@@ -14,9 +14,17 @@ The project SHALL provide a `cairn-cli skill install` command that installs the 
 - **WHEN** a user runs `cairn-cli skill install --target codex --scope project` from a project directory
 - **THEN** the command installs the bundled Skill under `<project>/.codex/skills/cairn`
 
-#### Scenario: Both targets
-- **WHEN** a user selects `--target both`
-- **THEN** the command installs equivalent bundled resources into both target directories and reports each result
+#### Scenario: Multiple repeated targets
+- **WHEN** a user runs `cairn-cli skill install --target codex --target claude`
+- **THEN** the command installs equivalent bundled resources into both target directories and reports each result once in the requested order
+
+#### Scenario: Duplicate target values
+- **WHEN** a user supplies the same target more than once
+- **THEN** the command installs that target only once and succeeds without duplicate result entries
+
+#### Scenario: Removed combined target alias
+- **WHEN** a user supplies `--target both`
+- **THEN** the command rejects the value and instructs the user to repeat `--target` with `claude` and `codex`
 
 ### Requirement: Safe repeatable installation
 The installer SHALL make identical existing files a no-op, SHALL refuse differing existing files by default, and SHALL overwrite only conflicting Skill files when the user explicitly supplies `--force`; it SHALL not delete unrelated files.

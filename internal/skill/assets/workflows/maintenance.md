@@ -4,7 +4,7 @@ The Skill is the only user interface. Keep installation, upgrade, backup, and re
 
 ## Bootstrap
 
-Use a trusted packaged `cairn-cli` binary or a checked-out Cairn source tree. The user may install the matching Skill resources with `cairn-cli skill install` (default: global Claude; use `--target codex` or `--scope project` when explicitly requested). Install the binary separately through the trusted environment, then call `system.handshake` and `system.health`. Report compatibility or repair errors without claiming readiness.
+Use a trusted packaged `cairn-cli` binary or a checked-out Cairn source tree. The user may install the matching Skill resources with `cairn-cli skill install` (default: global Claude; use `--target codex` or `--scope project` when explicitly requested). To install both editor integrations, repeat the target flag, for example `cairn-cli skill install --target codex --target claude`; do not use a combined `both` value. Install the binary separately through the trusted environment, then call `system.handshake` and `system.health`. Report compatibility or repair errors without claiming readiness.
 
 ## Upgrade
 

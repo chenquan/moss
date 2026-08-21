@@ -16,7 +16,8 @@ func newSkillCommand() *cobra.Command {
 		Args:          cobra.NoArgs,
 	}
 
-	var target, scope string
+	var targets []string
+	var scope string
 	var force bool
 	installCommand := &cobra.Command{
 		Use:           "install",
@@ -25,7 +26,7 @@ func newSkillCommand() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			results, err := cairnskill.Install(cairnskill.InstallOptions{Target: target, Scope: scope, Force: force})
+			results, err := cairnskill.Install(cairnskill.InstallOptions{Targets: targets, Scope: scope, Force: force})
 			if err != nil {
 				return err
 			}
@@ -35,7 +36,7 @@ func newSkillCommand() *cobra.Command {
 			return nil
 		},
 	}
-	installCommand.Flags().StringVar(&target, "target", cairnskill.TargetClaude, "target editor: claude, codex, or both")
+	installCommand.Flags().StringArrayVar(&targets, "target", []string{cairnskill.TargetClaude}, "target editor; repeat for multiple targets: claude or codex")
 	installCommand.Flags().StringVar(&scope, "scope", cairnskill.ScopeGlobal, "installation scope: global or project")
 	installCommand.Flags().BoolVar(&force, "force", false, "overwrite conflicting Skill files")
 	installCommand.SetHelpFunc(func(cmd *cobra.Command, args []string) {

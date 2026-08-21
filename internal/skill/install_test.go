@@ -64,9 +64,9 @@ func TestInstallDefaultsToGlobalClaude(t *testing.T) {
 	}
 }
 
-func TestInstallProjectCodexAndBothGlobalTargets(t *testing.T) {
+func TestInstallProjectCodexAndRepeatedGlobalTargets(t *testing.T) {
 	project := t.TempDir()
-	results, err := Install(InstallOptions{Target: TargetCodex, Scope: ScopeProject, ProjectDir: project})
+	results, err := Install(InstallOptions{Targets: []string{TargetCodex}, Scope: ScopeProject, ProjectDir: project})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,12 +75,15 @@ func TestInstallProjectCodexAndBothGlobalTargets(t *testing.T) {
 	}
 
 	home, codexHome := t.TempDir(), t.TempDir()
-	results, err = Install(InstallOptions{Target: TargetBoth, Scope: ScopeGlobal, HomeDir: home, CodexHome: codexHome})
+	results, err = Install(InstallOptions{Targets: []string{TargetCodex, TargetClaude}, Scope: ScopeGlobal, HomeDir: home, CodexHome: codexHome})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 2 {
-		t.Fatalf("both results = %+v", results)
+		t.Fatalf("repeated target results = %+v", results)
+	}
+	if results[0].Target != TargetCodex || results[1].Target != TargetClaude {
+		t.Fatalf("target order = %+v", results)
 	}
 	for _, path := range []string{
 		filepath.Join(home, ".claude", "skills", "cairn", "SKILL.md"),
@@ -92,9 +95,20 @@ func TestInstallProjectCodexAndBothGlobalTargets(t *testing.T) {
 	}
 }
 
+func TestInstallDeduplicatesRepeatedTargets(t *testing.T) {
+	home, codexHome := t.TempDir(), t.TempDir()
+	results, err := Install(InstallOptions{Targets: []string{TargetCodex, TargetClaude, TargetCodex}, HomeDir: home, CodexHome: codexHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].Target != TargetCodex || results[1].Target != TargetClaude {
+		t.Fatalf("deduplicated results = %+v", results)
+	}
+}
+
 func TestInstallConflictRequiresForceAndPreservesUnrelatedFiles(t *testing.T) {
 	project := t.TempDir()
-	options := InstallOptions{Target: TargetClaude, Scope: ScopeProject, ProjectDir: project}
+	options := InstallOptions{Targets: []string{TargetClaude}, Scope: ScopeProject, ProjectDir: project}
 	if _, err := Install(options); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +128,7 @@ func TestInstallConflictRequiresForceAndPreservesUnrelatedFiles(t *testing.T) {
 	if string(content) != "user edit" {
 		t.Fatalf("conflict changed user file: %q", content)
 	}
-	if _, err := Install(InstallOptions{Target: TargetClaude, Scope: ScopeProject, ProjectDir: project, Force: true}); err != nil {
+	if _, err := Install(InstallOptions{Targets: []string{TargetClaude}, Scope: ScopeProject, ProjectDir: project, Force: true}); err != nil {
 		t.Fatal(err)
 	}
 	content, _ = os.ReadFile(skillPath)
@@ -127,8 +141,11 @@ func TestInstallConflictRequiresForceAndPreservesUnrelatedFiles(t *testing.T) {
 }
 
 func TestInstallRejectsUnknownTargetAndScope(t *testing.T) {
-	if _, err := Install(InstallOptions{Target: "vim"}); err == nil {
+	if _, err := Install(InstallOptions{Targets: []string{"vim"}}); err == nil {
 		t.Fatal("unknown target unexpectedly accepted")
+	}
+	if _, err := Install(InstallOptions{Targets: []string{"both"}}); err == nil {
+		t.Fatal("removed both target unexpectedly accepted")
 	}
 	if _, err := Install(InstallOptions{Scope: "workspace"}); err == nil {
 		t.Fatal("unknown scope unexpectedly accepted")

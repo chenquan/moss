@@ -19,7 +19,7 @@ func TestRootCommandExposesRuntimeAndInstaller(t *testing.T) {
 	}
 }
 
-func TestSkillInstallCommandInstallsProjectCodexSkill(t *testing.T) {
+func TestSkillInstallCommandAcceptsRepeatedTargets(t *testing.T) {
 	project := t.TempDir()
 	oldDir, err := os.Getwd()
 	if err != nil {
@@ -32,15 +32,29 @@ func TestSkillInstallCommandInstallsProjectCodexSkill(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	root := NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"skill", "install", "--target", "codex", "--scope", "project"})
+	root.SetArgs([]string{"skill", "install", "--target", "codex", "--target", "claude", "--scope", "project"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if stderr.Len() != 0 || !strings.Contains(stdout.String(), filepath.Join(".codex", "skills", "cairn")) {
+	if stderr.Len() != 0 ||
+		!strings.Contains(stdout.String(), filepath.Join(".codex", "skills", "cairn")) ||
+		!strings.Contains(stdout.String(), filepath.Join(".claude", "skills", "cairn")) {
 		t.Fatalf("installer output stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(project, ".codex", "skills", "cairn", "SKILL.md")); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".claude", "skills", "cairn", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillInstallCommandRejectsCombinedTargetAlias(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	root := NewRootCommand(&stdout, &stderr)
+	root.SetArgs([]string{"skill", "install", "--target", "both", "--scope", "project"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "repeat --target") {
+		t.Fatalf("combined target error = %v", err)
 	}
 }
 

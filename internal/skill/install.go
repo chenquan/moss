@@ -19,14 +19,13 @@ var bundledAssets embed.FS
 const (
 	TargetClaude = "claude"
 	TargetCodex  = "codex"
-	TargetBoth   = "both"
 
 	ScopeGlobal  = "global"
 	ScopeProject = "project"
 )
 
 type InstallOptions struct {
-	Target     string
+	Targets    []string
 	Scope      string
 	Force      bool
 	HomeDir    string
@@ -48,7 +47,7 @@ type assetFile struct {
 }
 
 func Install(options InstallOptions) ([]InstallResult, error) {
-	targets, err := normalizeTargets(options.Target)
+	targets, err := normalizeTargets(options.Targets)
 	if err != nil {
 		return nil, err
 	}
@@ -87,19 +86,36 @@ func Install(options InstallOptions) ([]InstallResult, error) {
 	return results, nil
 }
 
-func normalizeTargets(value string) ([]string, error) {
-	target := strings.ToLower(strings.TrimSpace(value))
-	if target == "" {
-		target = TargetClaude
+func normalizeTargets(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return []string{TargetClaude}, nil
 	}
-	switch target {
-	case TargetClaude, TargetCodex:
-		return []string{target}, nil
-	case TargetBoth:
-		return []string{TargetClaude, TargetCodex}, nil
-	default:
-		return nil, fmt.Errorf("unsupported skill target %q; use claude, codex, or both", value)
+
+	targets := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		target := strings.ToLower(strings.TrimSpace(value))
+		if target == "" {
+			continue
+		}
+		switch target {
+		case TargetClaude, TargetCodex:
+			// accepted target
+		case "both":
+			return nil, fmt.Errorf("unsupported skill target %q; repeat --target with claude and codex", value)
+		default:
+			return nil, fmt.Errorf("unsupported skill target %q; use claude or codex and repeat --target for multiple targets", value)
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		targets = append(targets, target)
 	}
+	if len(targets) == 0 {
+		return []string{TargetClaude}, nil
+	}
+	return targets, nil
 }
 
 func resolveDestination(target, scope string, options InstallOptions) (string, error) {
