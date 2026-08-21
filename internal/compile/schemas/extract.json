@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["facts", "decisions", "preferences", "projects", "people", "relationships", "actions", "conflicts", "citations"],
+  "properties": {
+    "facts": {"$ref": "#/$defs/observations"},
+    "decisions": {"$ref": "#/$defs/observations"},
+    "preferences": {"$ref": "#/$defs/observations"},
+    "projects": {"$ref": "#/$defs/observations"},
+    "people": {"$ref": "#/$defs/observations"},
+    "relationships": {"$ref": "#/$defs/observations"},
+    "actions": {"$ref": "#/$defs/observations"},
+    "conflicts": {"$ref": "#/$defs/observations"},
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "locator"],
+        "properties": {
+          "source_id": {"type": "string", "minLength": 1},
+          "locator": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "source_ids"],
+        "properties": {
+          "text": {"type": "string", "minLength": 1},
+          "source_ids": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    }
+  }
+}

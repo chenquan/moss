@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["categories", "outline"],
+  "properties": {
+    "categories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "label", "source_ids"],
+        "properties": {
+          "kind": {"type": "string", "enum": ["fact", "decision", "preference", "project", "person", "relationship", "action", "conflict"]},
+          "label": {"type": "string", "minLength": 1},
+          "source_ids": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "outline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["heading", "bullets"],
+        "properties": {
+          "heading": {"type": "string", "minLength": 1},
+          "bullets": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

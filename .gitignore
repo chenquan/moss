@@ -1,0 +1,56 @@
+# 二进制
+xmind-server
+xmind
+cairn-cli
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 测试
+*.test
+*.out
+coverage.txt
+
+# 依赖
+vendor/
+node_modules/
+
+# 数据文件
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 日志
+*.log
+logs/
+
+# 环境变量
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+.claude/settings.local.json
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 构建输出
+dist/
+build/
+frontend/dist/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 配置（保留示例）
+config/config.local.yaml
