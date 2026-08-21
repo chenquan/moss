@@ -11,11 +11,36 @@ import (
 	"cairn/internal/protocol"
 )
 
-func TestRootCommandExposesOnlyCall(t *testing.T) {
+func TestRootCommandExposesRuntimeAndInstaller(t *testing.T) {
 	root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 	commands := root.Commands()
-	if len(commands) != 1 || commands[0].Name() != "call" {
+	if len(commands) != 2 || commands[0].Name() != "call" || commands[1].Name() != "skill" {
 		t.Fatalf("visible commands = %v", commands)
+	}
+}
+
+func TestSkillInstallCommandInstallsProjectCodexSkill(t *testing.T) {
+	project := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldDir)
+
+	var stdout, stderr bytes.Buffer
+	root := NewRootCommand(&stdout, &stderr)
+	root.SetArgs([]string{"skill", "install", "--target", "codex", "--scope", "project"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if stderr.Len() != 0 || !strings.Contains(stdout.String(), filepath.Join(".codex", "skills", "cairn")) {
+		t.Fatalf("installer output stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(project, ".codex", "skills", "cairn", "SKILL.md")); err != nil {
+		t.Fatal(err)
 	}
 }
 

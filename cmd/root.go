@@ -25,16 +25,17 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 		DisableSuggestions: true,
 		Args:               cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cairn-cli accepts only the machine operation: call")
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cairn-cli accepts the machine operation call or the setup command skill install")
 			return &ExitError{Code: 2}
 		},
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cairn-cli is machine-only; invoke call with request and response files")
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "cairn-cli exposes the machine call protocol and the explicit skill install setup command")
 	})
 	root.AddCommand(newCallCommand(stdout, stderr))
+	root.AddCommand(newSkillCommand())
 	return root
 }
 
