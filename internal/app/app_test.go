@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"moss/internal/protocol"
-	"moss/internal/storage"
+	"github.com/chenquan/moss/internal/protocol"
+	"github.com/chenquan/moss/internal/storage"
 )
 
 func TestSystemHandshakeAndHealth(t *testing.T) {

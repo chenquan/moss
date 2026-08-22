@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"moss/internal/protocol"
+	"github.com/chenquan/moss/internal/protocol"
 )
 
 func TestMossSkillIsExplicitOnlyAndRoutesProtocol(t *testing.T) {

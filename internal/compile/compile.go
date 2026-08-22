@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"moss/internal/protocol"
-	"moss/internal/storage"
+	"github.com/chenquan/moss/internal/protocol"
+	"github.com/chenquan/moss/internal/storage"
 )
 
 var stageOrder = []string{"extract", "classify", "write"}

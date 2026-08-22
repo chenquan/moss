@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	mossskill "moss/internal/skill"
+	mossskill "github.com/chenquan/moss/internal/skill"
 )
 
 func newSkillCommand() *cobra.Command {

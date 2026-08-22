@@ -8,14 +8,14 @@ import (
 	"io"
 	"strings"
 
-	"moss/internal/action"
-	"moss/internal/compile"
-	"moss/internal/knowledge"
-	"moss/internal/protocol"
-	"moss/internal/safety"
-	"moss/internal/source"
-	"moss/internal/storage"
-	"moss/internal/system"
+	"github.com/chenquan/moss/internal/action"
+	"github.com/chenquan/moss/internal/compile"
+	"github.com/chenquan/moss/internal/knowledge"
+	"github.com/chenquan/moss/internal/protocol"
+	"github.com/chenquan/moss/internal/safety"
+	"github.com/chenquan/moss/internal/source"
+	"github.com/chenquan/moss/internal/storage"
+	"github.com/chenquan/moss/internal/system"
 )
 
 const (

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"moss/cmd"
+	"github.com/chenquan/moss/cmd"
 )
 
 func main() {

@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
-	"moss/internal/app"
+	"github.com/chenquan/moss/internal/app"
 )
 
 func newCallCommand() *cobra.Command {
