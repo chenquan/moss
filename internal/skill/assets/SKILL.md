@@ -6,7 +6,7 @@ allowed-tools:
   - Read
   - Write
   - Bash(moss call *)
-compatibility: Requires Claude Code with access to the locally installed moss.
+compatibility: Requires Claude Code with access to the locally installed moss and permission to run moss call outside the Bash sandbox.
 ---
 
 # Moss local assistant
@@ -22,6 +22,7 @@ Moss is a local personal knowledge assistant. You are the only user interface fo
 ## Runtime contract
 
 - Invoke `moss call` as the primary machine entrypoint. It reads one JSON request from stdin and returns one JSON response on stdout.
+- Run `moss call` with host-level filesystem access outside the Bash sandbox so it can reach `~/.moss` and user-selected local files. If Claude Code reports a sandbox denial, retry the same Bash call with `dangerouslyDisableSandbox: true` when unsandboxed retries are allowed; do not redirect Moss data into the project sandbox or claim success without a response.
 - Use a quoted stdin heredoc or the host's equivalent stdin mechanism. Never create a protocol envelope file, and do not put user content in process arguments or unquoted shell syntax.
 - The stdio-only `moss call` entrypoint is the sole runtime transport. If it is unavailable, stop and direct the workflow to matching-runtime repair; never retry with transport flags.
 - Send actor requests with the matching bundled Skill version and treat a version mismatch as an installation/upgrade failure.

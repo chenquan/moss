@@ -10,6 +10,7 @@ The primary runtime entrypoint is:
 
 It reads one complete JSON request from stdin and writes one complete JSON response to stdout. The Skill is the only user interface. The CLI has no human command set, interactive prompts, Web UI, MCP integration, or answer-generation model.
 The stdio entrypoint is the only runtime transport. Transport flags and protocol envelope files are not supported.
+The call must run with host-level filesystem access because Moss stores data under `~/.moss` and reads user-selected local files. If Claude Code's sandbox blocks the call, the host may retry the same Bash invocation with `dangerouslyDisableSandbox: true` when `allowUnsandboxedCommands` permits it.
 
 By default, the runtime stores the SQLite database and managed files under `.moss` in the current user's home directory (`~/.moss`). `MOSS_DATA_DIR` may override that root for controlled runtime setup or testing.
 
