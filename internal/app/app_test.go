@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,7 +117,7 @@ func TestSystemExportRestoreAndIdempotency(t *testing.T) {
 	if _, err := os.Stat(backupPath); err != nil {
 		t.Fatalf("backup archive missing: %v", err)
 	}
-	if exportData["file_count"].(float64) < 1 || exportData["schema_version"].(float64) != 4 {
+	if exportData["file_count"].(float64) < 1 || int(exportData["schema_version"].(float64)) != storage.SchemaVersion {
 		t.Fatalf("backup metadata = %+v", exportData)
 	}
 	retry := export
@@ -746,6 +747,179 @@ func TestKnowledgeRetrievalCatalogCandidatesMaterializeAndHistory(t *testing.T) 
 	sensitiveHistory := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-retrieve-sensitive-history", Operation: "knowledge.history", Actor: actor, Arguments: map[string]json.RawMessage{"article_id": json.RawMessage(mustJSON(articleID))}})
 	if sensitiveHistory.OK || sensitiveHistory.Error == nil || sensitiveHistory.Error.Code != "SENSITIVITY_DENIED" {
 		t.Fatalf("sensitive history = %+v", sensitiveHistory)
+	}
+}
+
+func TestMultiSourceBatchPlanAppliesArticlesAndFactsAtomically(t *testing.T) {
+	dir := t.TempDir()
+	actor := protocol.Actor{Type: "claude-skill", SkillVersion: "0.1.0"}
+	inputs := []string{filepath.Join(dir, "one.md"), filepath.Join(dir, "two.md")}
+	for i, input := range inputs {
+		if err := os.WriteFile(input, []byte(fmt.Sprintf("source %d", i+1)), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourceIDs := make([]string, 0, 2)
+	for i, input := range inputs {
+		response := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: fmt.Sprintf("req-multi-ingest-%d", i), Operation: "source.ingest", Actor: actor, Arguments: map[string]json.RawMessage{"input_file": json.RawMessage(mustJSON(input)), "source_type": json.RawMessage(`"markdown"`), "sensitivity": json.RawMessage(`"normal"`), "origin_key": json.RawMessage(`"notes/project"`)}, IdempotencyKey: fmt.Sprintf("idem-multi-ingest-%d", i)})
+		if !response.OK {
+			t.Fatalf("ingest failed: %+v", response.Error)
+		}
+		sourceIDs = append(sourceIDs, response.Data.(map[string]any)["source_id"].(string))
+	}
+	start := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-start", Operation: "compile.start", Actor: actor, Arguments: map[string]json.RawMessage{"source_ids": json.RawMessage(mustJSON(sourceIDs)), "pipeline": json.RawMessage(`{"extractor_version":"test","prompt_hash":"p1","schema_version":"1","strategy":"multi"}`)}, IdempotencyKey: "idem-multi-start"})
+	if !start.OK {
+		t.Fatalf("multi start failed: %+v", start.Error)
+	}
+	data := start.Data.(map[string]any)
+	jobID := data["job_id"].(string)
+	stages := data["stages"].([]any)
+	writeStage := func(stage int, contents string, key string) {
+		path := stages[stage].(map[string]any)["result_file"].(string)
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		response := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-" + key, Operation: "compile.submit", Actor: actor, Arguments: map[string]json.RawMessage{"job_id": json.RawMessage(mustJSON(jobID)), "stage": json.RawMessage(mustJSON([]string{"extract", "classify", "write"}[stage])), "result_file": json.RawMessage(mustJSON(path))}, IdempotencyKey: "idem-multi-" + key})
+		if !response.OK {
+			t.Fatalf("multi submit %s failed: %+v", key, response.Error)
+		}
+	}
+	writeStage(0, fmt.Sprintf(`{"facts":[{"text":"shared fact","source_ids":[%q,%q]}],"decisions":[],"preferences":[],"projects":[],"people":[],"relationships":[],"actions":[],"conflicts":[],"citations":[]}`, sourceIDs[0], sourceIDs[1]), "extract")
+	writeStage(1, `{"categories":[],"outline":[]}`, "classify")
+	store, err := storage.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var extractionID string
+	if err := store.DB.QueryRow(`SELECT extraction_id FROM extractions ORDER BY created_at LIMIT 1`).Scan(&extractionID); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	writeStage(2, fmt.Sprintf(`{"articles":[{"operation":"create","title":"Shared Note","slug":"shared-note","summary":"A shared note","body":"Both sources agree.","sensitivity":"normal","tags":["project"],"source_ids":[%q,%q],"citations":[{"source_id":%q,"locator":"line 1"}]}],"facts":[{"operation":"create","fact_key":"project:shared","kind":"fact","text":"Both sources agree.","status":"active","source_ids":[%q,%q],"extraction_id":%q}]}`, sourceIDs[0], sourceIDs[1], sourceIDs[0], sourceIDs[0], sourceIDs[1], extractionID), "write")
+	preview := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-preview", Operation: "compile.preview", Actor: actor, Arguments: map[string]json.RawMessage{"job_id": json.RawMessage(mustJSON(jobID))}, IdempotencyKey: "idem-multi-preview"})
+	if !preview.OK {
+		t.Fatalf("multi preview failed: %+v", preview.Error)
+	}
+	planID := preview.Data.(map[string]any)["plan_id"].(string)
+	apply := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-apply", Operation: "compile.apply", Actor: actor, Arguments: map[string]json.RawMessage{"plan_id": json.RawMessage(mustJSON(planID)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-multi-apply"})
+	if !apply.OK {
+		t.Fatalf("multi apply failed: %+v", apply.Error)
+	}
+	store, err = storage.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var revision int
+	if err := store.DB.QueryRow(`SELECT origin_revision FROM sources WHERE source_id = ?`, sourceIDs[1]).Scan(&revision); err != nil || revision != 2 {
+		t.Fatalf("origin revision = %d, err = %v", revision, err)
+	}
+	var extractionCount int
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM extractions WHERE status = 'active'`).Scan(&extractionCount); err != nil || extractionCount != 2 {
+		t.Fatalf("active extraction count = %d, err = %v", extractionCount, err)
+	}
+	var factStatus string
+	if err := store.DB.QueryRow(`SELECT status FROM facts WHERE kind = 'fact' AND fact_key = 'project:shared'`).Scan(&factStatus); err != nil || factStatus != "active" {
+		t.Fatalf("fact status = %q, err = %v", factStatus, err)
+	}
+	reindex := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-reindex", Operation: "knowledge.reindex", Actor: actor, Arguments: map[string]json.RawMessage{}, IdempotencyKey: "idem-multi-reindex"})
+	if !reindex.OK {
+		t.Fatalf("reindex failed: %+v", reindex.Error)
+	}
+	candidates := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-candidates", Operation: "knowledge.candidates", Actor: actor, Arguments: map[string]json.RawMessage{"query": json.RawMessage(`"agree"`)}})
+	if !candidates.OK || len(candidates.Data.(map[string]any)["candidates"].([]any)) != 1 {
+		t.Fatalf("FTS candidates = %+v", candidates)
+	}
+	newInput := filepath.Join(dir, "three.md")
+	if err := os.WriteFile(newInput, []byte("new revision"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	newSource := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-revision", Operation: "source.ingest", Actor: actor, Arguments: map[string]json.RawMessage{"input_file": json.RawMessage(mustJSON(newInput)), "source_type": json.RawMessage(`"markdown"`), "sensitivity": json.RawMessage(`"normal"`), "origin_key": json.RawMessage(`"notes/project"`)}, IdempotencyKey: "idem-multi-revision"})
+	if !newSource.OK {
+		t.Fatalf("revision ingest failed: %+v", newSource.Error)
+	}
+	var freshness, extractionStatus string
+	if err := store.DB.QueryRow(`SELECT freshness FROM facts WHERE fact_key = 'project:shared'`).Scan(&freshness); err != nil || freshness != "stale" {
+		t.Fatalf("fact freshness = %q, err = %v", freshness, err)
+	}
+	if err := store.DB.QueryRow(`SELECT status FROM extractions WHERE extraction_id = ?`, extractionID).Scan(&extractionStatus); err != nil || extractionStatus != "stale" {
+		t.Fatalf("extraction status = %q, err = %v", extractionStatus, err)
+	}
+	var factID string
+	if err := store.DB.QueryRow(`SELECT fact_id FROM facts WHERE fact_key = 'project:shared'`).Scan(&factID); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	start2 := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-update-start", Operation: "compile.start", Actor: actor, Arguments: map[string]json.RawMessage{"source_ids": json.RawMessage(mustJSON(sourceIDs))}, IdempotencyKey: "idem-multi-update-start"})
+	if !start2.OK {
+		t.Fatalf("fact update start failed: %+v", start2.Error)
+	}
+	data2 := start2.Data.(map[string]any)
+	jobID2 := data2["job_id"].(string)
+	stages2 := data2["stages"].([]any)
+	submitStage2 := func(index int, contents string, key string) {
+		path := stages2[index].(map[string]any)["result_file"].(string)
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		response := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-update-" + key, Operation: "compile.submit", Actor: actor, Arguments: map[string]json.RawMessage{"job_id": json.RawMessage(mustJSON(jobID2)), "stage": json.RawMessage(mustJSON([]string{"extract", "classify", "write"}[index])), "result_file": json.RawMessage(mustJSON(path))}, IdempotencyKey: "idem-multi-update-" + key})
+		if !response.OK {
+			t.Fatalf("fact update submit %s failed: %+v", key, response.Error)
+		}
+	}
+	submitStage2(0, fmt.Sprintf(`{"facts":[],"decisions":[],"preferences":[],"projects":[],"people":[],"relationships":[],"actions":[],"conflicts":[],"citations":[]}`), "extract")
+	submitStage2(1, `{"categories":[],"outline":[]}`, "classify")
+	submitStage2(2, fmt.Sprintf(`{"articles":[],"facts":[{"operation":"update","fact_id":%q,"fact_key":"project:shared","kind":"fact","text":"The revised sources still agree.","status":"active","source_ids":[%q,%q]}]}`, factID, sourceIDs[0], sourceIDs[1]), "write")
+	preview2 := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-update-preview", Operation: "compile.preview", Actor: actor, Arguments: map[string]json.RawMessage{"job_id": json.RawMessage(mustJSON(jobID2))}, IdempotencyKey: "idem-multi-update-preview"})
+	if !preview2.OK {
+		t.Fatalf("fact update preview failed: %+v", preview2.Error)
+	}
+	plan2 := preview2.Data.(map[string]any)["plan_id"].(string)
+	apply2 := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-update-apply", Operation: "compile.apply", Actor: actor, Arguments: map[string]json.RawMessage{"plan_id": json.RawMessage(mustJSON(plan2)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-multi-update-apply"})
+	if !apply2.OK {
+		t.Fatalf("fact update apply failed: %+v", apply2.Error)
+	}
+	store, err = storage.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var versionCount, supersededCount int
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM fact_versions WHERE fact_id = ?`, factID).Scan(&versionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM fact_versions WHERE fact_id = ? AND status = 'superseded'`, factID).Scan(&supersededCount); err != nil {
+		t.Fatal(err)
+	}
+	if versionCount != 2 || supersededCount != 1 {
+		t.Fatalf("fact versions = %d, superseded = %d", versionCount, supersededCount)
+	}
+	article := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-materialize", Operation: "knowledge.materialize", Actor: actor, Arguments: map[string]json.RawMessage{"slug": json.RawMessage(`"shared-note"`)}})
+	if !article.OK || !strings.Contains(article.Data.(map[string]any)["content"].(string), "Both sources agree") {
+		t.Fatalf("materialized batch article = %+v", article)
+	}
+}
+
+func TestLegacyBackfillPlanIsExplicitAndModelFree(t *testing.T) {
+	dir := t.TempDir()
+	actor := protocol.Actor{Type: "claude-skill", SkillVersion: "0.1.0"}
+	input := filepath.Join(dir, "legacy.md")
+	if err := os.WriteFile(input, []byte("legacy source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ingest := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-backfill-ingest", Operation: "source.ingest", Actor: actor, Arguments: map[string]json.RawMessage{"input_file": json.RawMessage(mustJSON(input)), "source_type": json.RawMessage(`"markdown"`), "sensitivity": json.RawMessage(`"normal"`)}, IdempotencyKey: "idem-backfill-ingest"})
+	if !ingest.OK {
+		t.Fatalf("backfill ingest failed: %+v", ingest.Error)
+	}
+	sourceID := ingest.Data.(map[string]any)["source_id"].(string)
+	plan := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-backfill-plan", Operation: "knowledge.backfill.plan", Actor: actor, Arguments: map[string]json.RawMessage{"source_ids": json.RawMessage(mustJSON([]string{sourceID}))}, IdempotencyKey: "idem-backfill-plan"})
+	if !plan.OK {
+		t.Fatalf("backfill plan failed: %+v", plan.Error)
+	}
+	data := plan.Data.(map[string]any)
+	if data["requires_model"] != true || data["automatic_on_upgrade"] != false || len(data["source_ids"].([]any)) != 1 {
+		t.Fatalf("backfill manifest = %+v", data)
 	}
 }
 

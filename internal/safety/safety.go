@@ -76,8 +76,16 @@ type forgetTarget struct {
 	Sources  []forgetSource  `json:"sources"`
 	Blobs    []forgetBlob    `json:"blobs"`
 	Articles []forgetArticle `json:"articles"`
+	Facts    []forgetFact    `json:"facts"`
 	Actions  []forgetAction  `json:"actions"`
 	Jobs     []forgetJob     `json:"jobs"`
+}
+
+type forgetFact struct {
+	FactID  string `json:"fact_id"`
+	Version int    `json:"version"`
+	Status  string `json:"status"`
+	FactKey string `json:"fact_key"`
 }
 
 type forgetSource struct {
@@ -424,7 +432,7 @@ func resolveForget(ctx context.Context, store *storage.Storage, args forgetArgum
 		}
 	}
 	if strings.TrimSpace(args.OriginContains) != "" {
-		rows, err := store.DB.QueryContext(ctx, `SELECT source_id FROM sources WHERE forgotten_at IS NULL AND lower(origin_name) LIKE '%' || lower(?) || '%' ORDER BY source_id`, strings.TrimSpace(args.OriginContains))
+		rows, err := store.DB.QueryContext(ctx, `SELECT source_id FROM sources WHERE forgotten_at IS NULL AND (lower(origin_name) LIKE '%' || lower(?) || '%' OR lower(origin_key) LIKE '%' || lower(?) || '%') ORDER BY source_id`, strings.TrimSpace(args.OriginContains), strings.TrimSpace(args.OriginContains))
 		if err != nil {
 			return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot resolve source origin selector", true, nil)
 		}
@@ -445,7 +453,7 @@ func resolveForget(ctx context.Context, store *storage.Storage, args forgetArgum
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	target := forgetTarget{Sources: make([]forgetSource, 0), Blobs: make([]forgetBlob, 0), Articles: make([]forgetArticle, 0), Actions: make([]forgetAction, 0), Jobs: make([]forgetJob, 0)}
+	target := forgetTarget{Sources: make([]forgetSource, 0), Blobs: make([]forgetBlob, 0), Articles: make([]forgetArticle, 0), Facts: make([]forgetFact, 0), Actions: make([]forgetAction, 0), Jobs: make([]forgetJob, 0)}
 	for _, id := range ids {
 		var source forgetSource
 		if err := store.DB.QueryRowContext(ctx, `SELECT s.source_id, s.content_hash, b.raw_path, COALESCE(s.forgotten_at, '') FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.source_id = ? AND s.forgotten_at IS NULL`, id).Scan(&source.SourceID, &source.ContentHash, &source.RawPath, &source.ForgottenAt); errors.Is(err, sql.ErrNoRows) {
@@ -507,6 +515,19 @@ func resolveForget(ctx context.Context, store *storage.Storage, args forgetArgum
 		target.Articles = append(target.Articles, article)
 	}
 	articleRows.Close()
+	factRows, err := store.DB.QueryContext(ctx, `SELECT DISTINCT f.fact_id, f.current_version, f.status, f.fact_key FROM facts f JOIN fact_citations c ON c.fact_id = f.fact_id AND c.version = f.current_version WHERE f.status <> 'retracted' AND c.source_id IN (`+placeholders(len(ids))+") ORDER BY f.fact_id", stringSlice(ids)...)
+	if err != nil {
+		return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot resolve cited facts", true, nil)
+	}
+	for factRows.Next() {
+		var fact forgetFact
+		if err := factRows.Scan(&fact.FactID, &fact.Version, &fact.Status, &fact.FactKey); err != nil {
+			factRows.Close()
+			return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode cited fact", true, nil)
+		}
+		target.Facts = append(target.Facts, fact)
+	}
+	factRows.Close()
 	actionRows, err := store.DB.QueryContext(ctx, `SELECT action_id, COALESCE(forgotten_at, '') FROM actions WHERE forgotten_at IS NULL AND source_id IN (`+placeholders(len(ids))+") ORDER BY action_id", stringSlice(ids)...)
 	if err != nil {
 		return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot resolve source actions", true, nil)
@@ -533,7 +554,7 @@ func resolveForget(ctx context.Context, store *storage.Storage, args forgetArgum
 		target.Jobs = append(target.Jobs, job)
 	}
 	jobRows.Close()
-	impact := map[string]any{"sources": len(target.Sources), "raw_blobs": len(target.Blobs), "raw_blobs_to_trash": countMovableBlobs(target.Blobs), "articles": len(target.Articles), "actions": len(target.Actions), "compile_jobs": len(target.Jobs), "source_ids": ids}
+	impact := map[string]any{"sources": len(target.Sources), "raw_blobs": len(target.Blobs), "raw_blobs_to_trash": countMovableBlobs(target.Blobs), "articles": len(target.Articles), "facts": len(target.Facts), "actions": len(target.Actions), "compile_jobs": len(target.Jobs), "source_ids": ids}
 	diff := map[string]any{"kind": "forget", "source_ids": ids}
 	risk := []string{"privacy_impact", "reversible_trash"}
 	return target, impact, diff, risk, nil
@@ -641,6 +662,16 @@ func applyForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan s
 			return err
 		}
 	}
+	for _, fact := range target.Facts {
+		var version int
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT current_version, status FROM facts WHERE fact_id = ?`, fact.FactID).Scan(&version, &status); err != nil {
+			return planStaleOrStorage(err, "forget fact changed")
+		}
+		if version != fact.Version || status != fact.Status {
+			return protocol.NewCodedError("PLAN_STALE", "forget fact snapshot changed", false, map[string]any{"fact_id": fact.FactID})
+		}
+	}
 	for _, action := range target.Actions {
 		var forgotten string
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(forgotten_at, '') FROM actions WHERE action_id = ?`, action.ActionID).Scan(&forgotten); err != nil {
@@ -684,11 +715,29 @@ func applyForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan s
 		if _, err := tx.ExecContext(ctx, `UPDATE articles SET path = ?, forgotten_at = ? WHERE article_id = ? AND path = ? AND current_hash = ?`, article.TrashPath, time.Now().UTC().Format(time.RFC3339Nano), article.ArticleID, article.Path, article.CurrentHash); err != nil {
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot mark forgotten article", true, nil)
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM article_fts WHERE article_id = ?`, article.ArticleID); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot remove forgotten article index", true, nil)
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, source := range target.Sources {
 		if _, err := tx.ExecContext(ctx, `UPDATE sources SET forgotten_at = ? WHERE source_id = ? AND forgotten_at IS NULL`, now, source.SourceID); err != nil {
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot mark forgotten source", true, nil)
+		}
+	}
+	for _, fact := range target.Facts {
+		var text string
+		if err := tx.QueryRowContext(ctx, `SELECT text FROM fact_versions WHERE fact_id = ? AND version = ?`, fact.FactID, fact.Version).Scan(&text); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read fact version for retraction", true, nil)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE fact_versions SET status = 'superseded' WHERE fact_id = ? AND version = ?`, fact.FactID, fact.Version); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot supersede forgotten fact version", true, nil)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE facts SET current_version = ?, status = 'retracted', updated_at = ? WHERE fact_id = ? AND current_version = ? AND status = ?`, fact.Version+1, now, fact.FactID, fact.Version, fact.Status); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot retract forgotten fact", true, nil)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO fact_versions(fact_id, version, text, status, created_at) VALUES (?, ?, ?, 'retracted', ?)`, fact.FactID, fact.Version+1, text, now); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot record forgotten fact retraction", true, nil)
 		}
 	}
 	for _, action := range target.Actions {
@@ -757,6 +806,26 @@ func undoForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan sa
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore source", true, nil)
 		}
 	}
+	for _, fact := range target.Facts {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		var current int
+		if err := tx.QueryRowContext(ctx, `SELECT current_version FROM facts WHERE fact_id = ? AND status = 'retracted'`, fact.FactID).Scan(&current); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read forgotten fact version", true, nil)
+		}
+		var text string
+		if err := tx.QueryRowContext(ctx, `SELECT text FROM fact_versions WHERE fact_id = ? AND version = ?`, fact.FactID, fact.Version).Scan(&text); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read forgotten fact text", true, nil)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE fact_versions SET status = 'superseded' WHERE fact_id = ? AND version = ?`, fact.FactID, current); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot supersede retraction version", true, nil)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE facts SET current_version = ?, status = ?, updated_at = ? WHERE fact_id = ? AND current_version = ? AND status = 'retracted'`, current+1, fact.Status, now, fact.FactID, current); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore forgotten fact", true, nil)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO fact_versions(fact_id, version, text, status, created_at) VALUES (?, ?, ?, ?, ?)`, fact.FactID, current+1, text, fact.Status, now); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot record restored fact version", true, nil)
+		}
+	}
 	for _, action := range target.Actions {
 		if _, err := tx.ExecContext(ctx, `UPDATE actions SET forgotten_at = NULL, updated_at = ? WHERE action_id = ? AND forgotten_at IS NOT NULL`, time.Now().UTC().Format(time.RFC3339Nano), action.ActionID); err != nil {
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore action", true, nil)
@@ -798,6 +867,9 @@ func applyRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan
 	if _, err := tx.ExecContext(ctx, `UPDATE articles SET current_version = ?, current_hash = ?, updated_at = ? WHERE article_id = ? AND current_version = ? AND current_hash = ?`, target.TargetVersion, target.TargetHash, time.Now().UTC().Format(time.RFC3339Nano), target.ArticleID, target.CurrentVersion, target.CurrentHash); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot update rollback article", true, nil)
 	}
+	if err := storage.ReplaceArticleIndexTx(ctx, tx, target.ArticleID, target.TargetVersion, "", "", "", "", target.TargetContent, ""); err != nil {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot update rollback article index", true, nil)
+	}
 	return nil
 }
 
@@ -830,6 +902,9 @@ func undoRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan 
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE articles SET current_version = ?, current_hash = ?, updated_at = ? WHERE article_id = ? AND current_version = ? AND current_hash = ?`, previous.CurrentVersion, previous.CurrentHash, time.Now().UTC().Format(time.RFC3339Nano), previous.ArticleID, target.TargetVersion, target.TargetHash); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore rollback metadata", true, nil)
+	}
+	if err := storage.ReplaceArticleIndexTx(ctx, tx, previous.ArticleID, previous.CurrentVersion, "", "", "", "", previous.CurrentContent, ""); err != nil {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore rollback article index", true, nil)
 	}
 	return nil
 }

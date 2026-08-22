@@ -24,12 +24,27 @@ import (
 var stageOrder = []string{"extract", "classify", "write"}
 
 const (
-	maxStageBytes = 4 << 20
-	planLifetime  = 24 * time.Hour
+	maxStageBytes         = 4 << 20
+	maxCompileSourceBytes = 512 << 20
+	planLifetime          = 24 * time.Hour
 )
 
 type startArguments struct {
-	SourceID string `json:"source_id"`
+	SourceID  string              `json:"source_id,omitempty"`
+	SourceIDs []string            `json:"source_ids,omitempty"`
+	Pipeline  pipelineFingerprint `json:"pipeline,omitempty"`
+}
+
+type pipelineFingerprint struct {
+	ExtractorVersion string `json:"extractor_version,omitempty"`
+	PromptHash       string `json:"prompt_hash,omitempty"`
+	SchemaVersion    string `json:"schema_version,omitempty"`
+	Strategy         string `json:"strategy,omitempty"`
+}
+
+type compileSource struct {
+	id, hash, rawPath string
+	size              int64
 }
 
 type jobArguments struct {
@@ -79,13 +94,15 @@ type stageReference struct {
 }
 
 type jobResponse struct {
-	JobID        string           `json:"job_id"`
-	SourceID     string           `json:"source_id"`
-	State        string           `json:"state"`
-	CurrentStage string           `json:"current_stage,omitempty"`
-	CreatedAt    string           `json:"created_at,omitempty"`
-	UpdatedAt    string           `json:"updated_at,omitempty"`
-	Stages       []stageReference `json:"stages,omitempty"`
+	JobID        string              `json:"job_id"`
+	SourceID     string              `json:"source_id"`
+	SourceIDs    []string            `json:"source_ids,omitempty"`
+	Pipeline     pipelineFingerprint `json:"pipeline,omitempty"`
+	State        string              `json:"state"`
+	CurrentStage string              `json:"current_stage,omitempty"`
+	CreatedAt    string              `json:"created_at,omitempty"`
+	UpdatedAt    string              `json:"updated_at,omitempty"`
+	Stages       []stageReference    `json:"stages,omitempty"`
 }
 
 type planResponse struct {
@@ -107,8 +124,12 @@ func Start(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 	if codedErr != nil {
 		return protocol.Response{}, codedErr
 	}
-	if strings.TrimSpace(args.SourceID) == "" {
-		return protocol.Response{}, protocol.NewCodedError("REQUEST_INVALID", "source_id is required", false, nil)
+	sourceIDs := normalizeSourceIDs(args.SourceID, args.SourceIDs)
+	if len(sourceIDs) == 0 {
+		return protocol.Response{}, protocol.NewCodedError("REQUEST_INVALID", "source_id or source_ids is required", false, nil)
+	}
+	if len(sourceIDs) > 100 {
+		return protocol.Response{}, protocol.NewCodedError("REQUEST_INVALID", "source_ids cannot contain more than 100 sources", false, nil)
 	}
 	fingerprint, err := req.Fingerprint()
 	if err != nil {
@@ -120,26 +141,34 @@ func Start(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 		return replayOrConflict(stored, fingerprint)
 	}
 
-	var contentHash, rawPath string
-	var sourceType, sensitivity string
-	var sourceSize int64
-	err = store.DB.QueryRowContext(ctx, `SELECT s.content_hash, s.source_type, s.sensitivity, s.byte_size, b.raw_path FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.source_id = ? AND s.forgotten_at IS NULL`, args.SourceID).Scan(&contentHash, &sourceType, &sensitivity, &sourceSize, &rawPath)
-	if errors.Is(err, sql.ErrNoRows) {
-		return protocol.Response{}, protocol.NewCodedError("SOURCE_NOT_FOUND", "source was not found", false, nil)
+	sources := make([]compileSource, 0, len(sourceIDs))
+	for _, sourceID := range sourceIDs {
+		var item compileSource
+		err = store.DB.QueryRowContext(ctx, `SELECT s.content_hash, s.byte_size, b.raw_path FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.source_id = ? AND s.forgotten_at IS NULL`, sourceID).Scan(&item.hash, &item.size, &item.rawPath)
+		if errors.Is(err, sql.ErrNoRows) {
+			return protocol.Response{}, protocol.NewCodedError("SOURCE_NOT_FOUND", "source was not found", false, map[string]any{"source_id": sourceID})
+		}
+		if err != nil {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read compile source", true, nil)
+		}
+		item.id = sourceID
+		sources = append(sources, item)
 	}
-	if err != nil {
-		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read compile source", true, nil)
+	var totalBytes int64
+	for _, source := range sources {
+		totalBytes += source.size
+		if totalBytes > maxCompileSourceBytes {
+			return protocol.Response{}, protocol.NewCodedError("REQUEST_INVALID", "compile source set exceeds the aggregate byte limit", false, map[string]any{"max_bytes": maxCompileSourceBytes})
+		}
 	}
-	_ = sourceType
-	_ = sensitivity
 	jobID := newID("job")
 	jobRoot := filepath.Join(store.Paths.Jobs, jobID)
-	if err := initializeJobFiles(store, jobRoot, rawPath, contentHash); err != nil {
+	if err := initializeJobFiles(store, jobRoot, sources); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot initialize compile job files", true, nil)
 	}
-	stages := makeStageReferences(jobRoot, store.Paths.Root)
+	stages := makeStageReferences(jobRoot, store.Paths.Root, len(sources) > 1)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	response := protocol.NewSuccessResponse(req, jobResponse{JobID: jobID, SourceID: args.SourceID, State: "running", CurrentStage: "extract", CreatedAt: now, UpdatedAt: now, Stages: stages})
+	response := protocol.NewSuccessResponse(req, jobResponse{JobID: jobID, SourceID: sourceIDs[0], SourceIDs: sourceIDs, Pipeline: args.Pipeline, State: "running", CurrentStage: "extract", CreatedAt: now, UpdatedAt: now, Stages: stages})
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		_ = os.RemoveAll(jobRoot)
@@ -158,9 +187,16 @@ func Start(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 		_ = os.RemoveAll(jobRoot)
 		return replayOrConflict(stored, fingerprint)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO compile_jobs(job_id, source_id, state, current_stage, created_at, updated_at) VALUES (?, ?, 'running', 'extract', ?, ?)`, jobID, args.SourceID, now, now); err != nil {
+	pipelineJSON, _ := json.Marshal(args.Pipeline)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO compile_jobs(job_id, source_id, state, current_stage, pipeline_json, created_at, updated_at) VALUES (?, ?, 'running', 'extract', ?, ?, ?)`, jobID, sourceIDs[0], pipelineJSON, now, now); err != nil {
 		_ = os.RemoveAll(jobRoot)
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create compile job", true, nil)
+	}
+	for ordinal, sourceID := range sourceIDs {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO compile_job_sources(job_id, source_id, ordinal) VALUES (?, ?, ?)`, jobID, sourceID, ordinal); err != nil {
+			_ = os.RemoveAll(jobRoot)
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot register compile source set", true, nil)
+		}
 	}
 	for _, stage := range stages {
 		inputJSON, _ := json.Marshal(stage.InputFiles)
@@ -169,7 +205,7 @@ func Start(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create compile stage", true, nil)
 		}
 	}
-	if err := storage.InsertAuditTx(ctx, tx, newID("aud"), req.Operation, req.RequestID, req.IdempotencyKey, "succeeded", map[string]any{"job_id": jobID, "source_id": args.SourceID, "source_size": sourceSize}); err != nil {
+	if err := storage.InsertAuditTx(ctx, tx, newID("aud"), req.Operation, req.RequestID, req.IdempotencyKey, "succeeded", map[string]any{"job_id": jobID, "source_ids": sourceIDs}); err != nil {
 		_ = os.RemoveAll(jobRoot)
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot write compile audit event", true, nil)
 	}
@@ -217,12 +253,33 @@ func loadJob(ctx context.Context, store *storage.Storage, jobID string) (jobResp
 		return jobResponse{}, protocol.NewCodedError("REQUEST_INVALID", "job_id is required", false, nil)
 	}
 	var result jobResponse
-	err := store.DB.QueryRowContext(ctx, `SELECT cj.job_id, cj.source_id, cj.state, COALESCE(cj.current_stage, ''), cj.created_at, cj.updated_at FROM compile_jobs cj JOIN sources s ON s.source_id = cj.source_id AND s.forgotten_at IS NULL WHERE cj.job_id = ? AND cj.state <> 'forgotten'`, jobID).Scan(&result.JobID, &result.SourceID, &result.State, &result.CurrentStage, &result.CreatedAt, &result.UpdatedAt)
+	var pipelineJSON []byte
+	err := store.DB.QueryRowContext(ctx, `SELECT cj.job_id, cj.source_id, cj.state, COALESCE(cj.current_stage, ''), COALESCE(cj.pipeline_json, '{}'), cj.created_at, cj.updated_at FROM compile_jobs cj JOIN sources s ON s.source_id = cj.source_id AND s.forgotten_at IS NULL WHERE cj.job_id = ? AND cj.state <> 'forgotten'`, jobID).Scan(&result.JobID, &result.SourceID, &result.State, &result.CurrentStage, &pipelineJSON, &result.CreatedAt, &result.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return jobResponse{}, protocol.NewCodedError("JOB_NOT_FOUND", "compile job was not found", false, nil)
 	}
 	if err != nil {
 		return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read compile job", true, nil)
+	}
+	if err := json.Unmarshal(pipelineJSON, &result.Pipeline); err != nil {
+		return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "compile pipeline metadata is invalid", false, nil)
+	}
+	rowsSources, err := store.DB.QueryContext(ctx, `SELECT source_id FROM compile_job_sources WHERE job_id = ? ORDER BY ordinal ASC`, jobID)
+	if err == nil {
+		defer rowsSources.Close()
+		for rowsSources.Next() {
+			var sourceID string
+			if err := rowsSources.Scan(&sourceID); err != nil {
+				return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode compile source set", true, nil)
+			}
+			result.SourceIDs = append(result.SourceIDs, sourceID)
+		}
+		if err := rowsSources.Err(); err != nil {
+			return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish compile source set read", true, nil)
+		}
+	}
+	if len(result.SourceIDs) == 0 {
+		result.SourceIDs = []string{result.SourceID}
 	}
 	rows, err := store.DB.QueryContext(ctx, `SELECT stage, status, input_json, schema_path, result_path, COALESCE(result_hash, ''), COALESCE(submitted_at, '') FROM compile_stages WHERE job_id = ? ORDER BY CASE stage WHEN 'extract' THEN 1 WHEN 'classify' THEN 2 WHEN 'write' THEN 3 ELSE 4 END`, jobID)
 	if err != nil {
@@ -246,15 +303,21 @@ func loadJob(ctx context.Context, store *storage.Storage, jobID string) (jobResp
 	return result, nil
 }
 
-func initializeJobFiles(store *storage.Storage, jobRoot, rawPath, contentHash string) error {
+func initializeJobFiles(store *storage.Storage, jobRoot string, sources []compileSource) error {
 	for _, dir := range []string{"input", "schemas", "output"} {
 		if err := os.MkdirAll(filepath.Join(jobRoot, dir), 0700); err != nil {
 			return err
 		}
 	}
-	sourcePath := filepath.Join(store.Paths.Root, filepath.FromSlash(rawPath))
-	if err := copyManagedFile(sourcePath, filepath.Join(jobRoot, "input", "source.md")); err != nil {
-		return err
+	for index, source := range sources {
+		sourcePath := filepath.Join(store.Paths.Root, filepath.FromSlash(source.rawPath))
+		name := "source.md"
+		if len(sources) > 1 {
+			name = fmt.Sprintf("%03d-%s.md", index+1, safeFilePart(source.id))
+		}
+		if err := copyManagedFile(sourcePath, filepath.Join(jobRoot, "input", name)); err != nil {
+			return err
+		}
 	}
 	for _, stage := range stageOrder {
 		contents, err := SchemaBytes(stage)
@@ -265,16 +328,144 @@ func initializeJobFiles(store *storage.Storage, jobRoot, rawPath, contentHash st
 			return err
 		}
 	}
-	marker := filepath.Join(jobRoot, "input", "source.sha256")
-	return writePrivateFile(marker, []byte(contentHash+"\n"))
+	if err := writeCompileContext(store, jobRoot, sources); err != nil {
+		return err
+	}
+	hashes := make([]string, 0, len(sources))
+	for _, source := range sources {
+		hashes = append(hashes, source.hash)
+	}
+	return writePrivateFile(filepath.Join(jobRoot, "input", "source.sha256"), []byte(strings.Join(hashes, "\n")+"\n"))
 }
 
-func makeStageReferences(jobRoot, dataRoot string) []stageReference {
-	return []stageReference{
-		{Stage: "extract", Status: "available", InputFiles: []string{filepath.Join(jobRoot, "input", "source.md")}, SchemaFile: filepath.Join(jobRoot, "schemas", "extract.json"), ResultFile: filepath.Join(jobRoot, "output", "extract.json")},
-		{Stage: "classify", Status: "pending", InputFiles: []string{filepath.Join(jobRoot, "output", "extract.json")}, SchemaFile: filepath.Join(jobRoot, "schemas", "classify.json"), ResultFile: filepath.Join(jobRoot, "output", "classify.json")},
-		{Stage: "write", Status: "pending", InputFiles: []string{filepath.Join(jobRoot, "output", "classify.json")}, SchemaFile: filepath.Join(jobRoot, "schemas", "write.json"), ResultFile: filepath.Join(jobRoot, "output", "write.json")},
+func makeStageReferences(jobRoot, dataRoot string, multi bool) []stageReference {
+	extractInputs := []string{filepath.Join(jobRoot, "input", "source.md")}
+	if multi {
+		extractInputs = nil
+		matches, _ := filepath.Glob(filepath.Join(jobRoot, "input", "*.md"))
+		sort.Strings(matches)
+		extractInputs = matches
 	}
+	return []stageReference{
+		{Stage: "extract", Status: "available", InputFiles: extractInputs, SchemaFile: filepath.Join(jobRoot, "schemas", "extract.json"), ResultFile: filepath.Join(jobRoot, "output", "extract.json")},
+		{Stage: "classify", Status: "pending", InputFiles: []string{filepath.Join(jobRoot, "output", "extract.json"), filepath.Join(jobRoot, "input", "context.json")}, SchemaFile: filepath.Join(jobRoot, "schemas", "classify.json"), ResultFile: filepath.Join(jobRoot, "output", "classify.json")},
+		{Stage: "write", Status: "pending", InputFiles: []string{filepath.Join(jobRoot, "output", "classify.json"), filepath.Join(jobRoot, "input", "context.json")}, SchemaFile: filepath.Join(jobRoot, "schemas", "write.json"), ResultFile: filepath.Join(jobRoot, "output", "write.json")},
+	}
+}
+
+func writeCompileContext(store *storage.Storage, jobRoot string, sources []compileSource) error {
+	allowed := make(map[string]bool, len(sources))
+	for _, source := range sources {
+		allowed[source.id] = true
+	}
+	type articleContext struct {
+		ArticleID, Slug, Title, Summary, Sensitivity string
+		Version                                      int
+		SourceIDs                                    []string `json:"source_ids"`
+	}
+	type factContext struct {
+		FactID, FactKey, Kind, Text, Status, Freshness string
+		Version                                        int
+		SourceIDs                                      []string `json:"source_ids"`
+	}
+	articles := make([]articleContext, 0)
+	rows, err := store.DB.Query(`SELECT article_id, slug, title, sensitivity, current_version FROM articles WHERE forgotten_at IS NULL ORDER BY slug, article_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a articleContext
+		if err := rows.Scan(&a.ArticleID, &a.Slug, &a.Title, &a.Sensitivity, &a.Version); err != nil {
+			return err
+		}
+		citationRows, err := store.DB.Query(`SELECT DISTINCT source_id FROM article_citations WHERE article_id = ? AND version = ?`, a.ArticleID, a.Version)
+		if err != nil {
+			return err
+		}
+		for citationRows.Next() {
+			var sourceID string
+			if citationRows.Scan(&sourceID) == nil && allowed[sourceID] {
+				a.SourceIDs = append(a.SourceIDs, sourceID)
+			}
+		}
+		citationRows.Close()
+		if len(a.SourceIDs) > 0 {
+			articles = append(articles, a)
+		}
+	}
+	facts := make([]factContext, 0)
+	factRows, err := store.DB.Query(`SELECT fact_id, fact_key, kind, current_version, status, freshness FROM facts WHERE status <> 'retracted' ORDER BY kind, fact_key`)
+	if err != nil {
+		return err
+	}
+	defer factRows.Close()
+	for factRows.Next() {
+		var f factContext
+		if err := factRows.Scan(&f.FactID, &f.FactKey, &f.Kind, &f.Version, &f.Status, &f.Freshness); err != nil {
+			return err
+		}
+		var text string
+		if err := store.DB.QueryRow(`SELECT text FROM fact_versions WHERE fact_id = ? AND version = ?`, f.FactID, f.Version).Scan(&text); err != nil {
+			return err
+		}
+		f.Text = text
+		citationRows, err := store.DB.Query(`SELECT DISTINCT source_id FROM fact_citations WHERE fact_id = ? AND version = ?`, f.FactID, f.Version)
+		if err != nil {
+			return err
+		}
+		for citationRows.Next() {
+			var sourceID string
+			if citationRows.Scan(&sourceID) == nil && allowed[sourceID] {
+				f.SourceIDs = append(f.SourceIDs, sourceID)
+			}
+		}
+		citationRows.Close()
+		if len(f.SourceIDs) > 0 {
+			facts = append(facts, f)
+		}
+	}
+	value := map[string]any{"source_ids": make([]string, 0, len(sources)), "articles": articles, "facts": facts}
+	for _, source := range sources {
+		value["source_ids"] = append(value["source_ids"].([]string), source.id)
+	}
+	contents, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if len(contents) > maxStageBytes {
+		return fmt.Errorf("compile context exceeds %d bytes", maxStageBytes)
+	}
+	return writePrivateFile(filepath.Join(jobRoot, "input", "context.json"), contents)
+}
+
+func normalizeSourceIDs(primary string, values []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(values)+1)
+	for _, value := range append([]string{primary}, values...) {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func safeFilePart(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "source"
+	}
+	return b.String()
 }
 
 func absoluteRefs(root string, refs []string) []string {

@@ -4,15 +4,15 @@
 TBD - created by archiving change cairn-spec-baseline. Update Purpose after archive.
 ## Requirements
 ### Requirement: Immutable source ingestion
-`source.ingest` SHALL accept a regular local file, copy its bytes into content-addressed Raw storage, calculate a SHA-256 content hash, and never modify or delete the original file.
+`source.ingest` SHALL accept a regular local file and an optional explicit `origin_key`, preserve immutable content-addressed storage, and never infer lineage from filesystem paths.
 
-#### Scenario: New source
-- **WHEN** a readable regular file is ingested with a supported source type and sensitivity
-- **THEN** Moss stores an immutable Raw Blob, creates a Source record, and returns `source_id`, `content_hash`, and `duplicate: false`
+#### Scenario: Source with lineage
+- **WHEN** a valid file is ingested with an origin key
+- **THEN** Moss stores the source, key, content hash, and deterministic lineage revision
 
-#### Scenario: Unsupported filesystem object
-- **WHEN** the input path is a directory, device, socket, or rejected symlink
-- **THEN** Moss returns `SOURCE_INPUT_INVALID` and leaves Raw storage and SQLite unchanged
+#### Scenario: Source without lineage
+- **WHEN** a valid file is ingested without an origin key
+- **THEN** Moss stores an independent source with no propagation relationship
 
 ### Requirement: Blob deduplication and source context
 Moss SHALL deduplicate identical bytes by SHA-256 while preserving separate Source records when distinct ingestion requests carry different origin context.

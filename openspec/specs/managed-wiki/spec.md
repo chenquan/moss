@@ -15,15 +15,15 @@ Moss SHALL render a write-stage article candidate into deterministic Markdown wi
 - **THEN** preview includes the current version and proposed version without mutating the existing file
 
 ### Requirement: Track article versions and citations
-Moss SHALL store article metadata, every managed content version, content hashes, source citations, sensitivity, and the relationship between the article version and its compile job.
+Moss SHALL store every article projection version, source citations, affected fact versions, content hashes, and the relationship between the projection and its compile plan.
 
-#### Scenario: Version recorded after apply
-- **WHEN** a plan applies a new or updated article
-- **THEN** SQLite contains the resulting version and citations, and the Markdown hash matches the recorded version hash
+#### Scenario: Version recorded after batch apply
+- **WHEN** a confirmed batch plan applies multiple article projections
+- **THEN** every resulting article version and citation is persisted consistently with the batch state
 
-#### Scenario: Citation points outside the job source
-- **WHEN** a write result cites a source that is not part of the compile job
-- **THEN** submission is rejected before any article or plan mutation
+#### Scenario: Batch citation outside sources
+- **WHEN** any article operation cites a source outside the compile source set
+- **THEN** the batch is rejected before any article mutation
 
 ### Requirement: Detect managed Wiki drift
 Moss SHALL compare the current article file hash with the last managed version before preview, apply, status, or undo operations that read the article.

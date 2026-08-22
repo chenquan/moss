@@ -20,7 +20,7 @@ var (
 
 func initSchemas() {
 	schemas = make(map[string]*jsonschema.Schema)
-	for _, stage := range []string{"extract", "classify", "write"} {
+	for _, stage := range []string{"extract", "classify", "write", "multi-extract", "multi-write"} {
 		name := "schemas/" + stage + ".json"
 		contents, err := schemaFiles.ReadFile(name)
 		if err != nil {
@@ -38,6 +38,23 @@ func initSchemas() {
 
 func SchemaBytes(stage string) ([]byte, error) {
 	return schemaFiles.ReadFile("schemas/" + stage + ".json")
+}
+
+func ValidateMulti(stage string, contents []byte) error {
+	schemaOnce.Do(initSchemas)
+	if schemaErr != nil {
+		return schemaErr
+	}
+	name := "multi-" + stage
+	sch, ok := schemas[name]
+	if !ok {
+		return fmt.Errorf("unsupported multi-source compile stage %q", stage)
+	}
+	var value any
+	if err := json.Unmarshal(contents, &value); err != nil {
+		return err
+	}
+	return sch.Validate(value)
 }
 
 func Validate(stage string, contents []byte) error {

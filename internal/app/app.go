@@ -190,8 +190,14 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 			}
 			return protocol.NewSuccessResponse(req, data), nil
 		}
-	case "knowledge.catalog", "knowledge.candidates", "knowledge.materialize", "knowledge.history":
-		store, codedErr := openStorage(ctx)
+	case "knowledge.catalog", "knowledge.candidates", "knowledge.materialize", "knowledge.history", "knowledge.reindex", "knowledge.backfill.plan":
+		var store *storage.Storage
+		var codedErr *protocol.CodedError
+		if req.Operation == "knowledge.reindex" || req.Operation == "knowledge.backfill.plan" {
+			store, codedErr = openMutableStorage(ctx)
+		} else {
+			store, codedErr = openStorage(ctx)
+		}
 		if codedErr != nil {
 			return protocol.Response{}, codedErr
 		}
@@ -211,6 +217,18 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 			return protocol.NewSuccessResponse(req, data), nil
 		case "knowledge.materialize":
 			data, err := knowledge.Materialize(ctx, store, req)
+			if err != nil {
+				return protocol.Response{}, err
+			}
+			return protocol.NewSuccessResponse(req, data), nil
+		case "knowledge.reindex":
+			data, err := knowledge.Reindex(ctx, store, req)
+			if err != nil {
+				return protocol.Response{}, err
+			}
+			return protocol.NewSuccessResponse(req, data), nil
+		case "knowledge.backfill.plan":
+			data, err := knowledge.BackfillPlan(ctx, store, req)
 			if err != nil {
 				return protocol.Response{}, err
 			}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["pipeline", "items"],
+  "properties": {
+    "pipeline": {"$ref": "#/$defs/pipeline"},
+    "items": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/$defs/item"}}
+  },
+  "$defs": {
+    "pipeline": {"type": "object", "additionalProperties": false, "required": ["extractor_version", "prompt_hash", "schema_version", "strategy"], "properties": {
+      "extractor_version": {"type": "string", "minLength": 1, "maxLength": 120}, "prompt_hash": {"type": "string", "minLength": 1, "maxLength": 200}, "schema_version": {"type": "string", "minLength": 1, "maxLength": 40}, "strategy": {"type": "string", "minLength": 1, "maxLength": 80}
+    }},
+    "item": {"type": "object", "additionalProperties": false, "required": ["source_id", "content", "citations"], "properties": {
+      "source_id": {"type": "string", "minLength": 1, "maxLength": 200}, "content": {"type": "object", "maxProperties": 32}, "citations": {"type": "array", "maxItems": 200, "items": {"type": "object", "additionalProperties": false, "required": ["locator"], "properties": {"locator": {"type": "string", "minLength": 1, "maxLength": 500}}}}
+    }}
+  }
+}

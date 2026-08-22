@@ -2,6 +2,10 @@
 
 The Skill is the only user interface. Keep installation, upgrade, backup, and restore inside Claude Code and invoke the local runtime through the stdio-only `moss call` entrypoint.
 
+After an upgrade or an intentional drift repair, call `knowledge.reindex` with an idempotency key to rebuild the disposable local FTS projection. This is an explicit maintenance job and never invokes a model or recompiles legacy articles automatically.
+
+For legacy semantic extraction, call `knowledge.backfill.plan` explicitly, then start selected `compile.start` jobs from its manifest. Review and apply their normal plans; the upgrade path itself only migrates/indexes data.
+
 ## Bootstrap
 
 Use a trusted packaged `moss` binary or a checked-out Moss source tree. The user may install the matching Skill resources with `moss skill install` (default: global Claude; use `--target codex` or `--scope project` when explicitly requested). To install both editor integrations, repeat the target flag, for example `moss skill install --target codex --target claude`; do not use a combined `both` value. Install the matching binary and Skill as a pair through the trusted environment, then call `system.handshake` and `system.health` through stdin/stdout. Report compatibility or repair errors without claiming readiness.

@@ -274,6 +274,7 @@ func createBackup(ctx context.Context, store *storage.Storage, archivePath, back
 		{name: "raw", path: store.Paths.Raw},
 		{name: "wiki", path: store.Paths.Wiki},
 		{name: "jobs", path: store.Paths.Jobs},
+		{name: "extractions", path: store.Paths.Extractions},
 		{name: "trash", path: store.Paths.Trash},
 	} {
 		copied, err := copyBackupTree(tree.path, filepath.Join(workDir, tree.name), tree.name)
@@ -600,7 +601,7 @@ func validateSnapshotDatabase(path string) error {
 }
 
 func validateRestoredCore(ctx context.Context, store *storage.Storage) *protocol.CodedError {
-	for _, path := range []string{store.Paths.Root, store.Paths.Raw, store.Paths.Wiki, store.Paths.Jobs, store.Paths.Responses, store.Paths.Backups, store.Paths.Trash, store.Paths.Locks, store.Paths.Staging} {
+	for _, path := range []string{store.Paths.Root, store.Paths.Raw, store.Paths.Wiki, store.Paths.Jobs, store.Paths.Extractions, store.Paths.Responses, store.Paths.Backups, store.Paths.Trash, store.Paths.Locks, store.Paths.Staging} {
 		info, err := os.Lstat(path)
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "restored storage directory is invalid", true, nil)
@@ -621,7 +622,7 @@ func swapRestoredState(paths storage.Paths, stage, oldDir string) *protocol.Code
 	if err := os.MkdirAll(oldDir, 0700); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create restore rollback directory", true, nil)
 	}
-	names := []string{"moss.db", "raw", "wiki", "jobs", "trash"}
+	names := []string{"moss.db", "raw", "wiki", "jobs", "extractions", "trash"}
 	completed := make([]string, 0, len(names))
 	for _, name := range names {
 		active := filepath.Join(paths.Root, name)

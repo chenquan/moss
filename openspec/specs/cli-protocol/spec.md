@@ -69,6 +69,13 @@ The CLI capability response SHALL include `compile.start`, `compile.next`, `comp
 - **WHEN** a caller submits `compile.apply` without an idempotency key
 - **THEN** the CLI returns `IDEMPOTENCY_REQUIRED` before dispatching the operation
 
+### Requirement: Advertise supported operations
+The capability response SHALL advertise the backward-compatible multi-source compile fields, source lineage support, indexed retrieval, and `knowledge.reindex` while retaining the v1 operation names and mutation classifications.
+
+#### Scenario: New capability handshake
+- **WHEN** a matching Skill performs a handshake
+- **THEN** the response lists the new supported capability metadata and still accepts legacy compile requests
+
 ### Requirement: Cobra-backed machine command boundary
 The Moss executable SHALL expose a machine-only `call` entrypoint using the file-based protocol while allowing the explicit human-facing setup command `skill install`; all knowledge, source, action, plan, and system business operations SHALL remain behind `call`, and `call` SHALL require `--request` and `--response` file paths, reject positional arguments, and preserve the existing file-based protocol semantics.
 

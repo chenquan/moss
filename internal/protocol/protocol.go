@@ -181,7 +181,7 @@ func OptionBool(r Request, key string) (bool, *CodedError) {
 
 func IsMutating(operation string) bool {
 	switch operation {
-	case "source.ingest", "source.mark_sensitive", "compile.start", "compile.submit", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.undo", "action.create.plan", "action.update.plan", "action.apply", "source.forget.plan", "knowledge.rollback.plan", "system.export", "system.restore":
+	case "source.ingest", "source.mark_sensitive", "compile.start", "compile.submit", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.undo", "action.create.plan", "action.update.plan", "action.apply", "source.forget.plan", "knowledge.rollback.plan", "knowledge.reindex", "knowledge.backfill.plan", "system.export", "system.restore":
 		return true
 	default:
 		return false
@@ -209,6 +209,8 @@ func SupportedCapabilities() []Capability {
 		{Operation: "knowledge.candidates", Description: "Find local knowledge candidates"},
 		{Operation: "knowledge.history", Description: "Read managed article history"},
 		{Operation: "knowledge.materialize", Description: "Read a verified managed article"},
+		{Operation: "knowledge.reindex", Mutating: true, Description: "Rebuild the local article search index without model calls"},
+		{Operation: "knowledge.backfill.plan", Mutating: true, Description: "Create an explicit legacy backfill manifest; model compilation remains Skill-driven"},
 		{Operation: "action.apply", Mutating: true, Description: "Apply a confirmed action plan"},
 		{Operation: "action.create.plan", Mutating: true, Description: "Create a pending action plan"},
 		{Operation: "action.query", Description: "Query today's and waiting actions"},

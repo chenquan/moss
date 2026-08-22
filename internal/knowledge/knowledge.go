@@ -2,10 +2,17 @@ package knowledge
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/chenquan/moss/internal/protocol"
 	"github.com/chenquan/moss/internal/storage"
@@ -97,6 +104,280 @@ type candidatesData struct {
 	Query      string          `json:"query"`
 	Candidates []candidateData `json:"candidates"`
 	Count      int             `json:"count"`
+}
+
+type reindexData struct {
+	Indexed int    `json:"indexed"`
+	Skipped int    `json:"skipped"`
+	Status  string `json:"status"`
+}
+
+type backfillArguments struct {
+	SourceIDs []string `json:"source_ids,omitempty"`
+	Limit     int      `json:"limit,omitempty"`
+}
+type backfillData struct {
+	BackfillID         string   `json:"backfill_id"`
+	State              string   `json:"state"`
+	SourceIDs          []string `json:"source_ids"`
+	ArticleIDs         []string `json:"article_ids"`
+	RequiresModel      bool     `json:"requires_model"`
+	AutomaticOnUpgrade bool     `json:"automatic_on_upgrade"`
+}
+
+// BackfillPlan creates an explicit legacy-work manifest. It only inventories
+// sources without current extraction records; the Skill must start and review
+// compile jobs, so upgrades never invoke a model implicitly.
+func BackfillPlan(ctx context.Context, store *storage.Storage, req protocol.Request) (any, *protocol.CodedError) {
+	args, codedErr := protocol.DecodeArguments[backfillArguments](req)
+	if codedErr != nil {
+		return nil, codedErr
+	}
+	allowSensitive, codedErr := protocol.OptionBool(req, "allow_sensitive")
+	if codedErr != nil {
+		return nil, codedErr
+	}
+	limit, codedErr := boundedLimit(args.Limit, 100, 200)
+	if codedErr != nil {
+		return nil, codedErr
+	}
+	selected := make([]string, 0, len(args.SourceIDs))
+	seen := map[string]bool{}
+	for _, id := range args.SourceIDs {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			selected = append(selected, id)
+		}
+	}
+	query := `SELECT s.source_id FROM sources s WHERE s.forgotten_at IS NULL AND s.sensitivity = 'normal'`
+	params := []any{}
+	if allowSensitive {
+		query = `SELECT s.source_id FROM sources s WHERE s.forgotten_at IS NULL`
+	}
+	if len(selected) > 0 {
+		query += ` AND s.source_id IN (` + placeholdersAny(len(selected)) + `)`
+		for _, id := range selected {
+			params = append(params, id)
+		}
+	}
+	query += ` ORDER BY s.created_at, s.source_id LIMIT ?`
+	params = append(params, limit)
+	rows, err := store.DB.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot inspect legacy backfill sources", true, nil)
+	}
+	defer rows.Close()
+	sourceIDs := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode legacy backfill source", true, nil)
+		}
+		usable, checkErr := usableActiveExtraction(ctx, store, id)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if !usable {
+			sourceIDs = append(sourceIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish legacy backfill source read", true, nil)
+	}
+	articleSet := map[string]bool{}
+	articleIDs := make([]string, 0)
+	if len(sourceIDs) > 0 {
+		articleRows, err := store.DB.QueryContext(ctx, `SELECT DISTINCT article_id FROM article_citations WHERE source_id IN (`+placeholdersAny(len(sourceIDs))+`) ORDER BY article_id`, stringSliceAny(sourceIDs)...)
+		if err != nil {
+			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot inspect cited articles for backfill", true, nil)
+		}
+		defer articleRows.Close()
+		for articleRows.Next() {
+			var id string
+			if err := articleRows.Scan(&id); err != nil {
+				return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode cited article for backfill", true, nil)
+			}
+			if !articleSet[id] {
+				articleSet[id] = true
+				articleIDs = append(articleIDs, id)
+			}
+		}
+		if err := articleRows.Err(); err != nil {
+			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish cited article read", true, nil)
+		}
+	}
+	sourceJSON, _ := json.Marshal(sourceIDs)
+	articleJSON, _ := json.Marshal(articleIDs)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	fingerprint, err := req.Fingerprint()
+	if err != nil {
+		return nil, protocol.NewCodedError("REQUEST_INVALID", "cannot fingerprint request", false, nil)
+	}
+	backfillID := newBackfillID()
+	responseData := backfillData{BackfillID: backfillID, State: "planned", SourceIDs: sourceIDs, ArticleIDs: articleIDs, RequiresModel: true, AutomaticOnUpgrade: false}
+	response := protocol.NewSuccessResponse(req, responseData)
+	responseBytes, _ := json.Marshal(response)
+	tx, err := store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot begin backfill plan", true, nil)
+	}
+	defer tx.Rollback()
+	if stored, found, err := storage.ReserveIdempotencyTx(ctx, tx, req.IdempotencyKey, fingerprint); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot reserve backfill idempotency", true, nil)
+	} else if found {
+		var replay protocol.Response
+		if err := json.Unmarshal(stored.Response, &replay); err != nil {
+			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "stored backfill response is invalid", false, nil)
+		}
+		var data backfillData
+		if replay.OK {
+			raw, _ := json.Marshal(replay.Data)
+			if err := json.Unmarshal(raw, &data); err != nil {
+				return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "stored backfill response data is invalid", false, nil)
+			}
+			return data, nil
+		}
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "stored backfill response is not successful", true, nil)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO backfill_jobs(backfill_id, state, source_ids_json, article_ids_json, created_at, updated_at) VALUES (?, 'planned', ?, ?, ?, ?)`, backfillID, sourceJSON, articleJSON, now, now); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot persist backfill plan", true, nil)
+	}
+	if err := storage.InsertAuditTx(ctx, tx, "aud_"+backfillID, req.Operation, req.RequestID, req.IdempotencyKey, "succeeded", map[string]any{"backfill_id": backfillID, "source_count": len(sourceIDs), "requires_model": true}); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot audit backfill plan", true, nil)
+	}
+	if err := storage.CompleteIdempotencyTx(ctx, tx, req.IdempotencyKey, responseBytes); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot complete backfill idempotency", true, nil)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot commit backfill plan", true, nil)
+	}
+	return responseData, nil
+}
+
+func usableActiveExtraction(ctx context.Context, store *storage.Storage, sourceID string) (bool, *protocol.CodedError) {
+	var path, hash string
+	err := store.DB.QueryRowContext(ctx, `SELECT path, content_hash FROM extractions WHERE source_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`, sourceID).Scan(&path, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot inspect source extraction", true, nil)
+	}
+	managed := filepath.Clean(filepath.Join(store.Paths.Root, filepath.FromSlash(path)))
+	if !within(managed, store.Paths.Extractions) {
+		return false, nil
+	}
+	info, err := os.Lstat(managed)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, nil
+	}
+	contents, err := os.ReadFile(managed)
+	return err == nil && hashBytes(contents) == hash, nil
+}
+
+func newBackfillID() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("backfill_%d", time.Now().UnixNano())
+	}
+	return "backfill_" + hex.EncodeToString(b)
+}
+
+func placeholdersAny(count int) string { return strings.TrimSuffix(strings.Repeat("?,", count), ",") }
+func stringSliceAny(values []string) []any {
+	result := make([]any, len(values))
+	for i, value := range values {
+		result[i] = value
+	}
+	return result
+}
+
+// Reindex rebuilds the disposable article FTS projection from verified
+// managed Markdown and SQLite metadata. It never invokes a model and is safe
+// to repeat after an interrupted maintenance run.
+func Reindex(ctx context.Context, store *storage.Storage, req protocol.Request) (any, *protocol.CodedError) {
+	allowSensitive, codedErr := protocol.OptionBool(req, "allow_sensitive")
+	if codedErr != nil {
+		return nil, codedErr
+	}
+	fingerprint, err := req.Fingerprint()
+	if err != nil {
+		return nil, protocol.NewCodedError("REQUEST_INVALID", "cannot fingerprint request", false, nil)
+	}
+	if record, found, err := store.ReadIdempotency(ctx, req.IdempotencyKey); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read reindex idempotency", true, nil)
+	} else if found {
+		if record.Fingerprint != fingerprint {
+			return nil, protocol.NewCodedError("IDEMPOTENCY_CONFLICT", "idempotency key was used with different arguments", false, nil)
+		}
+		if record.Status == "processing" {
+			return nil, protocol.NewCodedError("IDEMPOTENCY_IN_PROGRESS", "an identical reindex is already being processed", true, nil)
+		}
+		var cached reindexData
+		if err := json.Unmarshal(record.Response, &cached); err != nil {
+			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "stored reindex response is invalid", false, nil)
+		}
+		return cached, nil
+	}
+	rows, codedErr := loadArticles(ctx, store)
+	if codedErr != nil {
+		return nil, codedErr
+	}
+	tx, err := store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot begin article index rebuild", true, nil)
+	}
+	defer tx.Rollback()
+	if record, found, err := storage.ReserveIdempotencyTx(ctx, tx, req.IdempotencyKey, fingerprint); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot reserve reindex idempotency", true, nil)
+	} else if found {
+		if record.Fingerprint != fingerprint {
+			return nil, protocol.NewCodedError("IDEMPOTENCY_CONFLICT", "idempotency key was used with different arguments", false, nil)
+		}
+		if record.Status == "processing" {
+			return nil, protocol.NewCodedError("IDEMPOTENCY_IN_PROGRESS", "an identical reindex is already being processed", true, nil)
+		}
+		var cached reindexData
+		if err := json.Unmarshal(record.Response, &cached); err != nil {
+			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "stored reindex response is invalid", false, nil)
+		}
+		return cached, nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM article_fts`); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot clear article index", true, nil)
+	}
+	indexed, skipped := 0, 0
+	for _, row := range rows {
+		if !sensitivityAllowed(row.Sensitivity, allowSensitive) {
+			skipped++
+			continue
+		}
+		parsed, _, _, readErr := readManagedArticle(store, row)
+		if readErr != nil {
+			if readErr.Code == "WIKI_DRIFT" || readErr.Code == "PATH_INVALID" || readErr.Code == "ARTICLE_TOO_LARGE" {
+				skipped++
+				continue
+			}
+			return nil, readErr
+		}
+		if err := storage.ReplaceArticleIndexTx(ctx, tx, row.ArticleID, row.Version, row.Title, row.Slug, strings.Join(parsed.Tags, " "), parsed.Summary, parsed.Body, strings.Join(parsed.SourceIDs, " ")); err != nil {
+			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot write article index", true, nil)
+		}
+		indexed++
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO index_meta(name, state, content_hash, updated_at) VALUES ('article_fts', 'ready', ?, ?) ON CONFLICT(name) DO UPDATE SET state = excluded.state, content_hash = excluded.content_hash, updated_at = excluded.updated_at`, fmt.Sprintf("count:%d", indexed), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot record article index health", true, nil)
+	}
+	data := reindexData{Indexed: indexed, Skipped: skipped, Status: fmt.Sprintf("indexed-%d", indexed)}
+	dataBytes, _ := json.Marshal(data)
+	if err := storage.CompleteIdempotencyTx(ctx, tx, req.IdempotencyKey, dataBytes); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot complete reindex idempotency", true, nil)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot commit article index rebuild", true, nil)
+	}
+	return data, nil
 }
 
 type materializedData struct {
@@ -221,6 +502,27 @@ func Candidates(ctx context.Context, store *storage.Storage, req protocol.Reques
 	}
 	query := strings.TrimSpace(args.Query)
 	topic := strings.ToLower(strings.TrimSpace(args.Topic))
+	ftsScores := make(map[string]int)
+	if query != "" {
+		match := ftsMatch(query)
+		if match != "" {
+			ftsRows, err := store.DB.QueryContext(ctx, `SELECT article_id, bm25(article_fts) FROM article_fts WHERE article_fts MATCH ? ORDER BY bm25(article_fts), article_id LIMIT ?`, match, maxCandidateLimit)
+			if err == nil {
+				defer ftsRows.Close()
+				for ftsRows.Next() {
+					var id string
+					var rank float64
+					if ftsRows.Scan(&id, &rank) == nil {
+						score := int(1000 - rank*100)
+						if score < 1 {
+							score = 1
+						}
+						ftsScores[id] = score
+					}
+				}
+			}
+		}
+	}
 	results := make([]candidateData, 0)
 	for _, row := range rows {
 		if !sensitivityAllowed(row.Sensitivity, allowSensitive) {
@@ -241,6 +543,9 @@ func Candidates(ctx context.Context, store *storage.Storage, req protocol.Reques
 			continue
 		}
 		score := scoreArticle(parsed, query)
+		if indexed, ok := ftsScores[row.ArticleID]; ok {
+			score = indexed
+		}
 		if query != "" && score == 0 {
 			continue
 		}
@@ -263,6 +568,18 @@ func Candidates(ctx context.Context, store *storage.Storage, req protocol.Reques
 		results = results[:limit]
 	}
 	return candidatesData{Query: query, Candidates: results, Count: len(results)}, nil
+}
+
+func ftsMatch(query string) string {
+	tokens := tokenize(query)
+	parts := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		token = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(token, `"`, ""), "'", ""))
+		if token != "" {
+			parts = append(parts, `"`+token+`"`)
+		}
+	}
+	return strings.Join(parts, " OR ")
 }
 
 // Materialize returns one complete, hash-verified current article.

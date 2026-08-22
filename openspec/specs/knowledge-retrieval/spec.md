@@ -15,19 +15,15 @@ Moss SHALL implement `knowledge.catalog` as a read-only operation that returns m
 - **THEN** those articles and their content-derived topic entries are omitted without exposing title, path, or snippets
 
 ### Requirement: Select bounded ranked candidates locally
-Moss SHALL implement `knowledge.candidates` as a bounded deterministic local filter over managed current articles, returning article IDs, scores, summaries/snippets, versions, drift flags, and source references but not complete article bodies.
+Moss SHALL implement `knowledge.candidates` as a bounded deterministic local search over the maintained FTS5 index, preserving article IDs, scores, summaries/snippets, versions, drift flags, and source references; it SHALL retain a safe substring fallback for unsupported queries.
 
 #### Scenario: Query finds relevant articles
-- **WHEN** Claude submits a non-empty query and a result limit
-- **THEN** Moss ranks title/slug/tag/summary/body matches with fixed scoring and resolves ties deterministically, returning no more than the requested limit
+- **WHEN** Claude submits a non-empty query and result limit
+- **THEN** Moss ranks permitted indexed articles deterministically and returns no more than the limit
 
-#### Scenario: Empty or topic query
-- **WHEN** Claude submits an empty query or a topic filter
-- **THEN** Moss returns catalogue-order candidates matching the topic without inventing an answer
-
-#### Scenario: Candidate file drift
-- **WHEN** an article's current file is missing, symlinked, or hash-mismatched
-- **THEN** Moss marks that candidate as drifted and does not return unverified body text as a snippet
+#### Scenario: Index unavailable
+- **WHEN** the FTS5 index is missing or unhealthy
+- **THEN** Moss returns a stable maintenance error or uses the bounded safe fallback without exposing unverified content
 
 ### Requirement: Materialize a verified complete article
 Moss SHALL implement `knowledge.materialize` as a read-only operation that resolves a selected managed article, verifies its current file hash and path, and returns the complete bounded Markdown content with metadata and source citations.

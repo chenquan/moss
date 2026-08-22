@@ -15,15 +15,15 @@ Moss SHALL initialize its default data root at `~/.moss` and SHALL create separa
 - **THEN** all database and filesystem writes remain inside that directory
 
 ### Requirement: SQLite integrity foundation
-Moss SHALL use SQLite with foreign keys enabled, WAL mode, an application schema version, and an integrity check exposed to health validation.
+Moss SHALL use additive schema migration to add extraction, fact, source-lineage, batch-plan, and FTS5 index state while preserving v4 Raw, Source, Article, and Plan data.
 
-#### Scenario: Healthy database
-- **WHEN** the database opens, migrations are current, and the integrity check succeeds
-- **THEN** `system.health` reports the storage component healthy
+#### Scenario: Upgrade existing v4 data
+- **WHEN** a v4 database is opened by the new runtime
+- **THEN** Moss migrates it to the new schema without deleting Raw, Wiki, source, or article records
 
-#### Scenario: Corrupt or incompatible database
-- **WHEN** SQLite integrity fails or the schema version is unsupported
-- **THEN** `system.health` reports `STORAGE_UNHEALTHY` and mutating operations are refused
+#### Scenario: Incomplete migration
+- **WHEN** a required migration or index structure cannot be validated
+- **THEN** health reports an unhealthy/recovery state and mutating operations are refused
 
 ### Requirement: Durable managed artifacts
 Managed files SHALL be written through temporary files and atomic renames, SHALL use restrictive permissions, and SHALL leave deterministic staging markers for recovery after an interrupted process.

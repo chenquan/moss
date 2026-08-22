@@ -29,6 +29,7 @@ type ingestArguments struct {
 	InputFile   string `json:"input_file"`
 	SourceType  string `json:"source_type"`
 	Sensitivity string `json:"sensitivity"`
+	OriginKey   string `json:"origin_key,omitempty"`
 }
 
 type getArguments struct {
@@ -42,14 +43,16 @@ type listArguments struct {
 }
 
 type sourceData struct {
-	SourceID    string `json:"source_id"`
-	ContentHash string `json:"content_hash"`
-	SourceType  string `json:"source_type"`
-	Sensitivity string `json:"sensitivity"`
-	ByteSize    int64  `json:"byte_size"`
-	OriginName  string `json:"origin_name,omitempty"`
-	RawFile     string `json:"raw_file"`
-	CreatedAt   string `json:"created_at"`
+	SourceID       string `json:"source_id"`
+	ContentHash    string `json:"content_hash"`
+	SourceType     string `json:"source_type"`
+	Sensitivity    string `json:"sensitivity"`
+	ByteSize       int64  `json:"byte_size"`
+	OriginName     string `json:"origin_name,omitempty"`
+	OriginKey      string `json:"origin_key,omitempty"`
+	OriginRevision int    `json:"origin_revision,omitempty"`
+	RawFile        string `json:"raw_file"`
+	CreatedAt      string `json:"created_at"`
 }
 
 type listData struct {
@@ -141,6 +144,7 @@ func Ingest(ctx context.Context, store *storage.Storage, req protocol.Request) (
 
 	sourceID := newID("src")
 	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	args.OriginKey = strings.TrimSpace(args.OriginKey)
 	response := protocol.NewSuccessResponse(req, struct {
 		SourceID    string `json:"source_id"`
 		ContentHash string `json:"content_hash"`
@@ -181,8 +185,22 @@ func Ingest(ctx context.Context, store *storage.Storage, req protocol.Request) (
 			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore Raw Blob path", true, nil)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO sources(source_id, content_hash, source_type, sensitivity, byte_size, origin_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, sourceID, contentHash, args.SourceType, args.Sensitivity, size, filepath.Base(args.InputFile), createdAt); err != nil {
+	originRevision := 0
+	if args.OriginKey != "" {
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(origin_revision), 0) + 1 FROM sources WHERE origin_key = ?`, args.OriginKey).Scan(&originRevision); err != nil {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot determine source origin revision", true, nil)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sources(source_id, content_hash, source_type, sensitivity, byte_size, origin_name, origin_key, origin_revision, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, sourceID, contentHash, args.SourceType, args.Sensitivity, size, filepath.Base(args.InputFile), nullString(args.OriginKey), nullInt(originRevision), createdAt); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot register source", true, nil)
+	}
+	if args.OriginKey != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE extractions SET status = 'stale' WHERE status = 'active' AND source_id IN (SELECT source_id FROM sources WHERE origin_key = ? AND source_id <> ?)`, args.OriginKey, sourceID); err != nil {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot mark superseded origin extractions stale", true, nil)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE facts SET freshness = 'stale', updated_at = ? WHERE fact_id IN (SELECT DISTINCT fv.fact_id FROM fact_versions fv JOIN extractions e ON e.extraction_id = fv.extraction_id JOIN sources old_source ON old_source.source_id = e.source_id WHERE old_source.origin_key = ? AND old_source.source_id <> ? AND e.status = 'stale')`, createdAt, args.OriginKey, sourceID); err != nil {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot mark superseded origin facts stale", true, nil)
+		}
 	}
 	if err := storage.InsertAuditTx(ctx, tx, newID("aud"), req.Operation, req.RequestID, req.IdempotencyKey, "succeeded", map[string]any{"source_id": sourceID, "content_hash": contentHash, "duplicate": duplicate}); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot write audit event", true, nil)
@@ -327,7 +345,9 @@ func Get(ctx context.Context, store *storage.Storage, req protocol.Request) (any
 	}
 	var data sourceData
 	var rawPath string
-	err := store.DB.QueryRowContext(ctx, `SELECT s.source_id, s.content_hash, s.source_type, s.sensitivity, s.byte_size, s.origin_name, s.created_at, b.raw_path FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.source_id = ? AND s.forgotten_at IS NULL`, args.SourceID).Scan(&data.SourceID, &data.ContentHash, &data.SourceType, &data.Sensitivity, &data.ByteSize, &data.OriginName, &data.CreatedAt, &rawPath)
+	var originKey sql.NullString
+	var originRevision sql.NullInt64
+	err := store.DB.QueryRowContext(ctx, `SELECT s.source_id, s.content_hash, s.source_type, s.sensitivity, s.byte_size, s.origin_name, s.origin_key, s.origin_revision, s.created_at, b.raw_path FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.source_id = ? AND s.forgotten_at IS NULL`, args.SourceID).Scan(&data.SourceID, &data.ContentHash, &data.SourceType, &data.Sensitivity, &data.ByteSize, &data.OriginName, &originKey, &originRevision, &data.CreatedAt, &rawPath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, protocol.NewCodedError("SOURCE_NOT_FOUND", "source was not found", false, nil)
 	}
@@ -342,6 +362,10 @@ func Get(ctx context.Context, store *storage.Storage, req protocol.Request) (any
 		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "source Raw content is unavailable", true, nil)
 	}
 	data.RawFile = rawPath
+	data.OriginKey = originKey.String
+	if originRevision.Valid {
+		data.OriginRevision = int(originRevision.Int64)
+	}
 	if !allowSensitive {
 		data.OriginName = ""
 	}
@@ -363,7 +387,7 @@ func List(ctx context.Context, store *storage.Storage, req protocol.Request) (an
 	if codedErr != nil {
 		return nil, codedErr
 	}
-	query := `SELECT s.source_id, s.content_hash, s.source_type, s.sensitivity, s.byte_size, s.origin_name, s.created_at, b.raw_path FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.forgotten_at IS NULL`
+	query := `SELECT s.source_id, s.content_hash, s.source_type, s.sensitivity, s.byte_size, s.origin_name, s.origin_key, s.origin_revision, s.created_at, b.raw_path FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.forgotten_at IS NULL`
 	params := make([]any, 0, 4)
 	if args.SourceType != "" {
 		query += ` AND s.source_type = ?`
@@ -386,8 +410,14 @@ func List(ctx context.Context, store *storage.Storage, req protocol.Request) (an
 	result := listData{Sources: make([]sourceData, 0)}
 	for rows.Next() {
 		var data sourceData
-		if err := rows.Scan(&data.SourceID, &data.ContentHash, &data.SourceType, &data.Sensitivity, &data.ByteSize, &data.OriginName, &data.CreatedAt, &data.RawFile); err != nil {
+		var originKey sql.NullString
+		var originRevision sql.NullInt64
+		if err := rows.Scan(&data.SourceID, &data.ContentHash, &data.SourceType, &data.Sensitivity, &data.ByteSize, &data.OriginName, &originKey, &originRevision, &data.CreatedAt, &data.RawFile); err != nil {
 			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode source list", true, nil)
+		}
+		data.OriginKey = originKey.String
+		if originRevision.Valid {
+			data.OriginRevision = int(originRevision.Int64)
 		}
 		if !allowSensitive {
 			data.OriginName = ""
@@ -411,8 +441,18 @@ func validateIngestArguments(args ingestArguments) *protocol.CodedError {
 	if !supportedSensitivity(args.Sensitivity) {
 		return protocol.NewCodedError("SENSITIVITY_INVALID", "sensitivity is not supported", false, map[string]any{"supported": []string{"normal", "sensitive", "restricted"}})
 	}
+	if args.OriginKey != "" {
+		if len(args.OriginKey) > 240 || strings.IndexFunc(args.OriginKey, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+			return protocol.NewCodedError("REQUEST_INVALID", "origin_key must be at most 240 characters and contain no control characters", false, nil)
+		}
+	}
 	return nil
 }
+
+func nullString(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: value != ""}
+}
+func nullInt(value int) sql.NullInt64 { return sql.NullInt64{Int64: int64(value), Valid: value > 0} }
 
 func supportedSourceType(value string) bool {
 	return value == "document" || value == "markdown" || value == "text"

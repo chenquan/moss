@@ -17,17 +17,21 @@ import (
 )
 
 type planDiff struct {
-	Kind              string `json:"kind"`
-	Path              string `json:"path"`
-	Slug              string `json:"slug"`
-	BeforeHash        string `json:"before_hash,omitempty"`
-	BeforeVersion     int    `json:"before_version"`
-	AfterHash         string `json:"after_hash"`
-	AfterVersion      int    `json:"after_version"`
-	BeforeTitle       string `json:"before_title,omitempty"`
-	BeforeSensitivity string `json:"before_sensitivity,omitempty"`
-	AfterTitle        string `json:"after_title"`
-	AfterSensitivity  string `json:"after_sensitivity"`
+	Kind              string   `json:"kind"`
+	Path              string   `json:"path"`
+	Slug              string   `json:"slug"`
+	BeforeHash        string   `json:"before_hash,omitempty"`
+	BeforeVersion     int      `json:"before_version"`
+	AfterHash         string   `json:"after_hash"`
+	AfterVersion      int      `json:"after_version"`
+	BeforeTitle       string   `json:"before_title,omitempty"`
+	BeforeSensitivity string   `json:"before_sensitivity,omitempty"`
+	AfterTitle        string   `json:"after_title"`
+	AfterSensitivity  string   `json:"after_sensitivity"`
+	AfterSummary      string   `json:"after_summary,omitempty"`
+	AfterBody         string   `json:"after_body,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+	SourceIDs         []string `json:"source_ids,omitempty"`
 }
 
 type planRecord struct {
@@ -87,6 +91,15 @@ func Preview(ctx context.Context, store *storage.Storage, req protocol.Request) 
 	if job.State != "preview_ready" {
 		return protocol.Response{}, protocol.NewCodedError("JOB_STATE_INVALID", "compile job is not ready for preview", false, map[string]any{"state": job.State})
 	}
+	if jobIsMulti(job) {
+		batch, batchErr := batchWriteForJob(ctx, store, job.JobID)
+		if batchErr != nil {
+			return protocol.Response{}, batchErr
+		}
+		if batch {
+			return previewBatch(ctx, store, req, job)
+		}
+	}
 	var resultPath, recordedHash, sourceID string
 	err = store.DB.QueryRowContext(ctx, `SELECT result_path, COALESCE(result_hash, ''), cj.source_id FROM compile_stages cs JOIN compile_jobs cj ON cj.job_id = cs.job_id WHERE cs.job_id = ? AND cs.stage = 'write'`, args.JobID).Scan(&resultPath, &recordedHash, &sourceID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -106,7 +119,7 @@ func Preview(ctx context.Context, store *storage.Storage, req protocol.Request) 
 	if err := Validate("write", contents); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STAGE_RESULT_INVALID", "write stage result does not satisfy its JSON Schema", false, err.Error())
 	}
-	if codedErr := validateReferences(ctx, store, "write", contents, sourceID); codedErr != nil {
+	if codedErr := validateReferences(ctx, store, "write", contents, args.JobID, sourceID); codedErr != nil {
 		return protocol.Response{}, codedErr
 	}
 	var candidate writeCandidate
@@ -212,7 +225,14 @@ func Inspect(ctx context.Context, store *storage.Storage, req protocol.Request) 
 	}
 	record, err := loadPlan(ctx, store, args.PlanID)
 	if err != nil {
-		return nil, err
+		if err.Code != "PLAN_NOT_FOUND" {
+			return nil, err
+		}
+		batch, batchErr := loadBatchPlan(ctx, store, args.PlanID)
+		if batchErr != nil {
+			return nil, batchErr
+		}
+		return batch.response(), nil
 	}
 	return record.response(), nil
 }
@@ -237,7 +257,14 @@ func Apply(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 	}
 	record, codedErr := loadPlan(ctx, store, args.PlanID)
 	if codedErr != nil {
-		return protocol.Response{}, codedErr
+		if codedErr.Code != "PLAN_NOT_FOUND" {
+			return protocol.Response{}, codedErr
+		}
+		batch, batchErr := loadBatchPlan(ctx, store, args.PlanID)
+		if batchErr != nil {
+			return protocol.Response{}, batchErr
+		}
+		return applyBatch(ctx, store, req, batch)
 	}
 	if record.State != "pending" {
 		return protocol.Response{}, protocol.NewCodedError("PLAN_STATE_INVALID", "plan is not pending", false, map[string]any{"state": record.State})
@@ -314,6 +341,9 @@ func Apply(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 	}
 	if err := insertPlanCitations(ctx, tx, record); err != nil {
 		return protocol.Response{}, err
+	}
+	if err := storage.ReplaceArticleIndexTx(ctx, tx, record.ArticleID, record.ProposedVersion, record.Diff.AfterTitle, record.Diff.Slug, strings.Join(record.Diff.Tags, " "), record.Diff.AfterSummary, record.Diff.AfterBody, strings.Join(record.Diff.SourceIDs, " ")); err != nil {
+		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot update article index", true, nil)
 	}
 	planUpdate, err := tx.ExecContext(ctx, `UPDATE plans SET state = 'applied', applied_at = ? WHERE plan_id = ? AND state = 'pending'`, now, record.ID)
 	if err != nil {
@@ -434,6 +464,19 @@ func Undo(ctx context.Context, store *storage.Storage, req protocol.Request) (pr
 			return protocol.Response{}, protocol.NewCodedError("PLAN_STALE", "article version changed before undo", false, nil)
 		}
 	}
+	if record.Kind == "create" {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM article_fts WHERE article_id = ?`, record.ArticleID); err != nil {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot remove article index", true, nil)
+		}
+	} else {
+		previous := ""
+		if record.PreviousContent.Valid {
+			previous = record.PreviousContent.String
+		}
+		if err := storage.ReplaceArticleIndexTx(ctx, tx, record.ArticleID, record.BaseVersion, record.Diff.BeforeTitle, record.Diff.Slug, "", "", previous, ""); err != nil {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore article index", true, nil)
+		}
+	}
 	planUpdate, err := tx.ExecContext(ctx, `UPDATE plans SET state = 'undone', undone_at = ? WHERE plan_id = ? AND state = 'applied'`, now, record.ID)
 	if err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot mark plan undone", true, nil)
@@ -497,7 +540,7 @@ func prepareArticle(ctx context.Context, store *storage.Storage, candidate write
 			return articleRecord{}, false, nil, planDiff{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot determine next article version", true, nil)
 		}
 		article.NextVersion = nextVersion
-		return article, true, riskFlags, planDiff{Kind: "update", Path: article.Path, Slug: article.Slug, BeforeHash: article.Hash, BeforeVersion: article.Version, BeforeTitle: article.Title, BeforeSensitivity: article.Sensitivity}, nil
+		return article, true, riskFlags, planDiff{Kind: "update", Path: article.Path, Slug: article.Slug, BeforeHash: article.Hash, BeforeVersion: article.Version, BeforeTitle: article.Title, BeforeSensitivity: article.Sensitivity, AfterTitle: candidate.Title, AfterSensitivity: candidate.Sensitivity, AfterSummary: candidate.Summary, AfterBody: candidate.Body, Tags: candidate.Tags, SourceIDs: candidate.SourceIDs}, nil
 	}
 	article, err := queryArticle(ctx, store.DB, `SELECT article_id, slug, title, path, sensitivity, current_version, current_hash FROM articles WHERE slug = ? AND forgotten_at IS NULL`, candidate.Slug)
 	if err == nil {
@@ -519,7 +562,7 @@ func prepareArticle(ctx context.Context, store *storage.Storage, candidate write
 	article.Path = filepath.Join(store.Paths.Wiki, "articles", candidate.Slug+".md")
 	article.Version = 0
 	article.NextVersion = 1
-	return article, false, riskFlags, planDiff{Kind: "create", Path: article.Path, Slug: article.Slug}, nil
+	return article, false, riskFlags, planDiff{Kind: "create", Path: article.Path, Slug: article.Slug, AfterTitle: candidate.Title, AfterSensitivity: candidate.Sensitivity, AfterSummary: candidate.Summary, AfterBody: candidate.Body, Tags: candidate.Tags, SourceIDs: candidate.SourceIDs}, nil
 }
 
 func renderArticle(article articleRecord, candidate writeCandidate, version int) (string, error) {

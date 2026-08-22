@@ -46,6 +46,8 @@ Use this shape for every request. `arguments` is always an object, even when it 
 | Stop compilation | `compile.abort` | `job_id` | **MUTATING**; do not abort an applied job |
 | Browse knowledge | `knowledge.catalog` | optional `topic`, `limit` | read-only |
 | Search knowledge | `knowledge.candidates` | `query`, optional `topic`, `limit` | read-only; use summaries only for selection |
+| Rebuild search index | `knowledge.reindex` | none | **MUTATING**; explicit maintenance only, never invokes a model |
+| Plan legacy backfill | `knowledge.backfill.plan` | optional `source_ids`, `limit` | **MUTATING** manifest only; Skill must start/review compile jobs; never automatic on upgrade |
 | Read selected article | `knowledge.materialize` | exactly one `article_id` or `slug`; optional `options.inline_content` | read-only; cite returned article/source references; use the returned managed path and `bytes` when content is not inline |
 | Explain article history | `knowledge.history` | article selector, optional `limit`, `include_content` | read-only |
 | Roll back an article | `knowledge.rollback.plan` → `plan.apply` | article selector, `target_version`; then `plan_id` | plan is **MUTATING**; show diff and confirm before apply |

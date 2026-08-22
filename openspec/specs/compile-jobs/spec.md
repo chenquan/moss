@@ -4,19 +4,19 @@
 TBD - created by archiving change cairn-spec-baseline. Update Purpose after archive.
 ## Requirements
 ### Requirement: Start a resumable compile job
-`compile.start` SHALL create an idempotent single-source job, copy the source into the job input area, create extract/classify/write stage records, and return a job ID with the first available stage.
+`compile.start` SHALL create an idempotent job for either one legacy source or a bounded source set, copy all sources into managed job inputs, create extract/classify/write stage records, and return the first available stage.
 
-#### Scenario: Start from an existing source
-- **WHEN** a valid source ID is provided with a new idempotency key
-- **THEN** Moss creates a `running` job, preserves the source hash, and returns managed input/schema/result file references for the extract stage
+#### Scenario: Start from a source set
+- **WHEN** valid source IDs are provided with a new idempotency key
+- **THEN** Moss creates one running job with deterministic source membership and managed stage references
 
 #### Scenario: Unknown source
-- **WHEN** `compile.start` references an unknown source ID
+- **WHEN** any requested source ID is unknown or forgotten
 - **THEN** Moss returns `SOURCE_NOT_FOUND` and creates no job
 
 #### Scenario: Retry start
 - **WHEN** the same start request is retried with the same idempotency key
-- **THEN** Moss returns the original job ID without creating another job
+- **THEN** Moss returns the original job without creating another job
 
 ### Requirement: Expose the next stage
 `compile.next` SHALL return only the next valid stage for a job, including its schema file, input files, result file, and stage status, without allowing the caller to select an arbitrary stage.
@@ -30,19 +30,15 @@ TBD - created by archiving change cairn-spec-baseline. Update Purpose after arch
 - **THEN** `compile.next` returns the current state without advancing it
 
 ### Requirement: Validate and submit stage results
-`compile.submit` SHALL require the current stage, validate the result file against the embedded stage schema, enforce managed paths and bounded size, validate source citations and sensitivity, record the result hash, and advance the job only after all checks pass.
+`compile.submit` SHALL validate source-set references, extraction provenance, fact operations, article operations, sensitivity, managed paths, stage order, and bounded sizes before advancing a job.
 
-#### Scenario: Valid extract/classify/write result
-- **WHEN** Claude writes a schema-valid result to the exact current stage result file
-- **THEN** Moss marks that stage submitted and exposes the next stage or preview-ready state
+#### Scenario: Valid multi-source result
+- **WHEN** a stage result references only job sources and satisfies its schema
+- **THEN** Moss records its result hash and advances the job exactly once
 
-#### Scenario: Malformed or invalid result
-- **WHEN** the result is invalid JSON, violates its schema, references an unknown source, or is outside the job directory
-- **THEN** Moss returns a stable validation error and leaves the stage available for correction
-
-#### Scenario: Duplicate submission
-- **WHEN** an already submitted stage is submitted again
-- **THEN** Moss returns `STAGE_ALREADY_SUBMITTED` or the idempotent original response and does not advance the job twice
+#### Scenario: Invalid result
+- **WHEN** a result is malformed, oversized, out of order, or references an external source
+- **THEN** Moss returns a stable validation error and leaves the current stage available
 
 ### Requirement: Query and abort jobs
 `compile.status` SHALL return deterministic job/stage metadata, and `compile.abort` SHALL stop a non-applied job idempotently while preserving audit and diagnostic artifacts.

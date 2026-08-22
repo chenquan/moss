@@ -14,23 +14,24 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 const (
 	dataDirEnv = "MOSS_DATA_DIR"
 )
 
 type Paths struct {
-	Root      string
-	Database  string
-	Raw       string
-	Wiki      string
-	Jobs      string
-	Responses string
-	Backups   string
-	Trash     string
-	Locks     string
-	Staging   string
+	Root        string
+	Database    string
+	Raw         string
+	Wiki        string
+	Jobs        string
+	Extractions string
+	Responses   string
+	Backups     string
+	Trash       string
+	Locks       string
+	Staging     string
 }
 
 func ResolvePaths() (Paths, error) {
@@ -47,16 +48,17 @@ func ResolvePaths() (Paths, error) {
 		return Paths{}, fmt.Errorf("resolve data root: %w", err)
 	}
 	return Paths{
-		Root:      root,
-		Database:  filepath.Join(root, "moss.db"),
-		Raw:       filepath.Join(root, "raw"),
-		Wiki:      filepath.Join(root, "wiki"),
-		Jobs:      filepath.Join(root, "jobs"),
-		Responses: filepath.Join(root, "responses"),
-		Backups:   filepath.Join(root, "backups"),
-		Trash:     filepath.Join(root, "trash"),
-		Locks:     filepath.Join(root, "locks"),
-		Staging:   filepath.Join(root, "staging"),
+		Root:        root,
+		Database:    filepath.Join(root, "moss.db"),
+		Raw:         filepath.Join(root, "raw"),
+		Wiki:        filepath.Join(root, "wiki"),
+		Jobs:        filepath.Join(root, "jobs"),
+		Extractions: filepath.Join(root, "extractions"),
+		Responses:   filepath.Join(root, "responses"),
+		Backups:     filepath.Join(root, "backups"),
+		Trash:       filepath.Join(root, "trash"),
+		Locks:       filepath.Join(root, "locks"),
+		Staging:     filepath.Join(root, "staging"),
 	}, nil
 }
 
@@ -104,7 +106,7 @@ func Open(ctx context.Context) (*Storage, error) {
 func (s *Storage) Close() error { return s.DB.Close() }
 
 func ensureLayout(paths Paths) error {
-	dirs := []string{paths.Root, paths.Raw, paths.Wiki, paths.Jobs, paths.Responses, paths.Backups, paths.Trash, paths.Locks, paths.Staging}
+	dirs := []string{paths.Root, paths.Raw, paths.Wiki, paths.Jobs, paths.Extractions, paths.Responses, paths.Backups, paths.Trash, paths.Locks, paths.Staging}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			return fmt.Errorf("create data directory %q: %w", dir, err)
@@ -140,6 +142,8 @@ func (s *Storage) migrate(ctx context.Context) error {
 			sensitivity TEXT NOT NULL,
 			byte_size INTEGER NOT NULL,
 			origin_name TEXT,
+			origin_key TEXT,
+			origin_revision INTEGER,
 			forgotten_at TEXT,
 			created_at TEXT NOT NULL
 		)`,
@@ -167,6 +171,7 @@ func (s *Storage) migrate(ctx context.Context) error {
 			source_id TEXT NOT NULL REFERENCES sources(source_id),
 			state TEXT NOT NULL,
 			current_stage TEXT,
+			pipeline_json BLOB,
 			applied_plan_id TEXT,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
@@ -182,6 +187,116 @@ func (s *Storage) migrate(ctx context.Context) error {
 			rejected_reason TEXT,
 			submitted_at TEXT,
 			PRIMARY KEY(job_id, stage)
+		)`,
+		`CREATE TABLE IF NOT EXISTS compile_job_sources (
+			job_id TEXT NOT NULL REFERENCES compile_jobs(job_id) ON DELETE CASCADE,
+			source_id TEXT NOT NULL REFERENCES sources(source_id),
+			ordinal INTEGER NOT NULL,
+			PRIMARY KEY(job_id, source_id),
+			UNIQUE(job_id, ordinal)
+		)`,
+		`CREATE TABLE IF NOT EXISTS extractions (
+			extraction_id TEXT PRIMARY KEY,
+			source_id TEXT NOT NULL REFERENCES sources(source_id),
+			source_hash TEXT NOT NULL,
+			content_hash TEXT NOT NULL,
+			path TEXT NOT NULL,
+			extractor_version TEXT NOT NULL,
+			prompt_hash TEXT NOT NULL,
+			schema_version TEXT NOT NULL,
+			strategy TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('active', 'stale', 'superseded', 'retracted')),
+			created_at TEXT NOT NULL,
+			supersedes_id TEXT REFERENCES extractions(extraction_id)
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_extractions_fingerprint ON extractions(source_id, source_hash, extractor_version, prompt_hash, schema_version, strategy, content_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_extractions_source_status ON extractions(source_id, status, created_at)`,
+		`CREATE TABLE IF NOT EXISTS facts (
+			fact_id TEXT PRIMARY KEY,
+			fact_key TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			current_version INTEGER NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'retracted')),
+			freshness TEXT NOT NULL DEFAULT 'current' CHECK (freshness IN ('current', 'stale')),
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(kind, fact_key)
+		)`,
+		`CREATE TABLE IF NOT EXISTS fact_versions (
+			fact_id TEXT NOT NULL REFERENCES facts(fact_id) ON DELETE CASCADE,
+			version INTEGER NOT NULL,
+			text TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'retracted')),
+			extraction_id TEXT REFERENCES extractions(extraction_id),
+			supersedes_fact_id TEXT REFERENCES facts(fact_id),
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(fact_id, version)
+		)`,
+		`CREATE TABLE IF NOT EXISTS fact_citations (
+			fact_id TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			source_id TEXT NOT NULL REFERENCES sources(source_id),
+			locator TEXT NOT NULL,
+			PRIMARY KEY(fact_id, version, source_id, locator),
+			FOREIGN KEY(fact_id, version) REFERENCES fact_versions(fact_id, version) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_facts_status ON facts(status, updated_at, fact_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_fact_versions_extraction ON fact_versions(extraction_id, fact_id, version)`,
+		`CREATE TABLE IF NOT EXISTS compile_batch_plans (
+			plan_id TEXT PRIMARY KEY,
+			job_id TEXT NOT NULL REFERENCES compile_jobs(job_id),
+			state TEXT NOT NULL CHECK (state IN ('pending', 'applied', 'undone', 'expired')),
+			base_hash TEXT NOT NULL,
+			diff_json BLOB NOT NULL,
+			risk_json BLOB NOT NULL,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			applied_at TEXT,
+			undone_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS compile_batch_articles (
+			plan_id TEXT NOT NULL REFERENCES compile_batch_plans(plan_id) ON DELETE CASCADE,
+			ordinal INTEGER NOT NULL,
+			operation TEXT NOT NULL CHECK (operation IN ('create', 'update', 'retract')),
+			article_id TEXT,
+			slug TEXT NOT NULL,
+			base_version INTEGER NOT NULL,
+			base_hash TEXT,
+			proposed_version INTEGER NOT NULL,
+			proposed_hash TEXT NOT NULL,
+			proposed_content TEXT NOT NULL,
+			previous_content TEXT,
+			diff_json BLOB NOT NULL,
+			PRIMARY KEY(plan_id, ordinal)
+		)`,
+		`CREATE TABLE IF NOT EXISTS compile_batch_facts (
+			plan_id TEXT NOT NULL REFERENCES compile_batch_plans(plan_id) ON DELETE CASCADE,
+			ordinal INTEGER NOT NULL,
+			operation TEXT NOT NULL CHECK (operation IN ('create', 'update', 'retract')),
+			fact_id TEXT,
+			fact_key TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			base_version INTEGER NOT NULL,
+			text TEXT NOT NULL,
+			status TEXT NOT NULL,
+			extraction_id TEXT,
+			diff_json BLOB NOT NULL,
+			PRIMARY KEY(plan_id, ordinal)
+		)`,
+		`CREATE VIRTUAL TABLE IF NOT EXISTS article_fts USING fts5(article_id UNINDEXED, version UNINDEXED, title, slug, tags, summary, body, source_ids)`,
+		`CREATE TABLE IF NOT EXISTS index_meta (
+			name TEXT PRIMARY KEY,
+			state TEXT NOT NULL,
+			content_hash TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS backfill_jobs (
+			backfill_id TEXT PRIMARY KEY,
+			state TEXT NOT NULL CHECK (state IN ('planned', 'started', 'completed', 'cancelled')),
+			source_ids_json BLOB NOT NULL,
+			article_ids_json BLOB NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS articles (
 			article_id TEXT PRIMARY KEY,
@@ -303,12 +418,19 @@ func (s *Storage) migrate(ctx context.Context) error {
 		def   string
 	}{
 		{table: "sources", name: "forgotten_at", def: "TEXT"},
+		{table: "sources", name: "origin_key", def: "TEXT"},
+		{table: "sources", name: "origin_revision", def: "INTEGER"},
+		{table: "compile_jobs", name: "pipeline_json", def: "BLOB"},
+		{table: "facts", name: "freshness", def: "TEXT NOT NULL DEFAULT 'current'"},
 		{table: "articles", name: "forgotten_at", def: "TEXT"},
 		{table: "actions", name: "forgotten_at", def: "TEXT"},
 	} {
 		if err := ensureColumn(ctx, s.DB, column.table, column.name, column.def); err != nil {
 			return err
 		}
+	}
+	if _, err := s.DB.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_sources_origin ON sources(origin_key, origin_revision, source_id)`); err != nil {
+		return fmt.Errorf("create source lineage index: %w", err)
 	}
 	var value string
 	err := s.DB.QueryRowContext(ctx, `SELECT value FROM schema_meta WHERE key = 'schema_version'`).Scan(&value)
@@ -321,7 +443,7 @@ func (s *Storage) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	if (value == "1" || value == "2" || value == "3") && SchemaVersion == 4 {
+	if value != fmt.Sprint(SchemaVersion) && (value == "1" || value == "2" || value == "3" || value == "4") && SchemaVersion == 5 {
 		if _, err := s.DB.ExecContext(ctx, `UPDATE schema_meta SET value = ? WHERE key = 'schema_version'`, fmt.Sprint(SchemaVersion)); err != nil {
 			return fmt.Errorf("upgrade schema version: %w", err)
 		}
@@ -367,10 +489,33 @@ type Health struct {
 	Recovery      []string          `json:"recovery,omitempty"`
 }
 
+// ReplaceArticleIndexTx updates the deterministic FTS projection for one
+// current article. The managed Markdown and SQLite article metadata remain the
+// source of truth; this table is rebuildable maintenance state.
+func ReplaceArticleIndexTx(ctx context.Context, tx *sql.Tx, articleID string, version int, title, slug, tags, summary, body, sourceIDs string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM article_fts WHERE article_id = ?`, articleID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO article_fts(article_id, version, title, slug, tags, summary, body, source_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, articleID, version, title, slug, tags, summary, body, sourceIDs)
+	return err
+}
+
+func ReplaceArticleIndex(ctx context.Context, db *sql.DB, articleID string, version int, title, slug, tags, summary, body, sourceIDs string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := ReplaceArticleIndexTx(ctx, tx, articleID, version, title, slug, tags, summary, body, sourceIDs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Storage) Health(ctx context.Context) (Health, error) {
 	result := Health{Overall: "healthy", Components: map[string]string{}, SchemaVersion: SchemaVersion}
 	for name, path := range map[string]string{
-		"root": s.Paths.Root, "raw": s.Paths.Raw, "wiki": s.Paths.Wiki, "jobs": s.Paths.Jobs,
+		"root": s.Paths.Root, "raw": s.Paths.Raw, "wiki": s.Paths.Wiki, "jobs": s.Paths.Jobs, "extractions": s.Paths.Extractions,
 		"responses": s.Paths.Responses, "backups": s.Paths.Backups, "trash": s.Paths.Trash,
 		"locks": s.Paths.Locks, "staging": s.Paths.Staging,
 	} {
@@ -388,6 +533,14 @@ func (s *Storage) Health(ctx context.Context) (Health, error) {
 		result.Overall = "unhealthy"
 	} else {
 		result.Components["sqlite"] = "healthy"
+	}
+	var indexState string
+	if err := s.DB.QueryRowContext(ctx, `SELECT state FROM index_meta WHERE name = 'article_fts'`).Scan(&indexState); err != nil {
+		result.Components["article-index"] = "needs-maintenance"
+	} else if indexState != "ready" {
+		result.Components["article-index"] = "needs-maintenance"
+	} else {
+		result.Components["article-index"] = "healthy"
 	}
 	var version string
 	if err := s.DB.QueryRowContext(ctx, `SELECT value FROM schema_meta WHERE key = 'schema_version'`).Scan(&version); err != nil || version != fmt.Sprint(SchemaVersion) {

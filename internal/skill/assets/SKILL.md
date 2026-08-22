@@ -44,6 +44,8 @@ Use this route before selecting an operation:
 | Remember or import a local file | `source.ingest`; if organization is requested, continue through the compile workflow |
 | Organize material into the knowledge base | `source.ingest` → `compile.start` → `compile.next`/`compile.submit` → `compile.preview` → confirmed `compile.apply` |
 | Ask about remembered knowledge | `knowledge.catalog`/`knowledge.candidates` → `knowledge.materialize`; use `knowledge.history` for evolution questions |
+| Repair local search maintenance | `knowledge.reindex` (explicit, idempotent, no model invocation) |
+| Plan legacy knowledge backfill | `knowledge.backfill.plan` → explicit `compile.start` jobs; upgrades never invoke models |
 | Create or change a task, commitment, or reminder | `action.create.plan`/`action.update.plan` → confirmed `action.apply`; use `action.query` for status questions |
 | Forget sources or a project | `source.forget.plan` → `plan.inspect` → explicit confirmation → confirmed `plan.apply` |
 | Roll back an article or undo a safety plan | `knowledge.history` → `knowledge.rollback.plan` → explicit confirmation → `plan.apply`; use `plan.undo` only for an unchanged applied safety plan |
@@ -72,7 +74,7 @@ When the user asks to change a captured source's privacy classification, call `s
 
 ## Compile-to-knowledge workflow
 
-The compile operation set is `compile.start`, `compile.next`, `compile.submit`, `compile.status`, `compile.preview`, `compile.apply`, and `compile.abort`.
+The compile operation set is `compile.start`, `compile.next`, `compile.submit`, `compile.status`, `compile.preview`, `compile.apply`, and `compile.abort`. `compile.start` accepts the legacy `source_id` or a stable `source_ids` set for multi-source jobs.
 
 When the user asks to organize a source into the personal knowledge base:
 
