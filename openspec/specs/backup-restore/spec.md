@@ -6,6 +6,8 @@ TBD - created by archiving change cairn-bootstrap-upgrade. Update Purpose after 
 ### Requirement: Export a verified local backup
 Moss SHALL implement `system.export` as an idempotent machine operation that creates a private ZIP backup containing a SQLite-consistent snapshot, managed Raw/Wiki/Jobs/trash files, a schema version, and per-file SHA-256 manifest entries without returning personal content.
 
+Moss backup archives SHALL use the `moss-backup/v1` format identifier, `.moss-backup.zip` default extension, and `database/moss.db` snapshot path. Cairn-format archives are not compatible.
+
 #### Scenario: Export healthy state
 - **WHEN** the Skill calls `system.export` against healthy storage
 - **THEN** Moss publishes one archive below the private backup directory and returns its backup ID, path, schema version, file count, and byte count
@@ -36,4 +38,3 @@ Moss SHALL implement `system.restore` with an archive path confined to the priva
 #### Scenario: Restore crash boundary
 - **WHEN** a filesystem or database failure occurs after restore staging begins
 - **THEN** Moss leaves a private recovery marker and old state sufficient for recovery, and `system.health` blocks future mutations
-

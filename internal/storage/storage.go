@@ -17,8 +17,7 @@ import (
 const SchemaVersion = 4
 
 const (
-	dataDirEnv       = "MOSS_DATA_DIR"
-	legacyDataDirEnv = "CAIRN_DATA_DIR"
+	dataDirEnv = "MOSS_DATA_DIR"
 )
 
 type Paths struct {
@@ -37,16 +36,11 @@ type Paths struct {
 func ResolvePaths() (Paths, error) {
 	root := strings.TrimSpace(os.Getenv(dataDirEnv))
 	if root == "" {
-		// Keep the pre-Moss override working so an upgrade does not strand
-		// existing local data or test harnesses that still set CAIRN_DATA_DIR.
-		root = strings.TrimSpace(os.Getenv(legacyDataDirEnv))
-	}
-	if root == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return Paths{}, fmt.Errorf("resolve user home: %w", err)
 		}
-		root = filepath.Join(home, ".cairn")
+		root = filepath.Join(home, ".moss")
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -54,7 +48,7 @@ func ResolvePaths() (Paths, error) {
 	}
 	return Paths{
 		Root:      root,
-		Database:  filepath.Join(root, "cairn.db"),
+		Database:  filepath.Join(root, "moss.db"),
 		Raw:       filepath.Join(root, "raw"),
 		Wiki:      filepath.Join(root, "wiki"),
 		Jobs:      filepath.Join(root, "jobs"),

@@ -528,7 +528,7 @@ func renderArticle(article articleRecord, candidate writeCandidate, version int)
 	citations := uniqueCitations(candidate.Citations)
 	var b strings.Builder
 	b.WriteString("---\n")
-	b.WriteString("cairn_article_id: ")
+	b.WriteString("moss_article_id: ")
 	b.WriteString(strconv.Quote(article.ID))
 	b.WriteString("\n")
 	b.WriteString("title: ")

@@ -12,10 +12,10 @@ func TestSafetyHelperDeterminism(t *testing.T) {
 	if got := placeholders(3); got != "?,?,?" {
 		t.Fatalf("placeholders = %q", got)
 	}
-	if within("/var/lib/cairn/wiki/articles/a.md", "/var/lib/cairn/wiki/articles") != true {
+	if within("/var/lib/moss/wiki/articles/a.md", "/var/lib/moss/wiki/articles") != true {
 		t.Fatal("within rejected a managed child")
 	}
-	if within("/var/lib/cairn/wiki/articles-other/a.md", "/var/lib/cairn/wiki/articles") {
+	if within("/var/lib/moss/wiki/articles-other/a.md", "/var/lib/moss/wiki/articles") {
 		t.Fatal("within accepted a sibling directory")
 	}
 }

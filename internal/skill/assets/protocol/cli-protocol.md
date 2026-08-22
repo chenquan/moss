@@ -11,7 +11,7 @@ The primary runtime entrypoint is:
 It reads one complete JSON request from stdin and writes one complete JSON response to stdout. The Skill is the only user interface. The CLI has no human command set, interactive prompts, Web UI, MCP integration, or answer-generation model.
 The stdio entrypoint is the only runtime transport. Transport flags and protocol envelope files are not supported.
 
-By default, the runtime stores the SQLite database and managed files under `.cairn` in the current user's home directory (`~/.cairn`) for upgrade compatibility. `MOSS_DATA_DIR` may override that root; `CAIRN_DATA_DIR` remains a legacy alias for controlled runtime setup or testing.
+By default, the runtime stores the SQLite database and managed files under `.moss` in the current user's home directory (`~/.moss`). `MOSS_DATA_DIR` may override that root for controlled runtime setup or testing.
 
 ### Stdio rules
 

@@ -176,7 +176,7 @@ func parseManagedMarkdown(contents []byte) (parsedArticle, error) {
 			return parsedArticle{}, err
 		}
 		switch parts[0] {
-		case "cairn_article_id":
+		case "moss_article_id":
 			result.ArticleID = value
 		case "title":
 			result.Title = value

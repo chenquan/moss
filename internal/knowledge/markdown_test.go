@@ -4,7 +4,7 @@ import "testing"
 
 func TestParseManagedMarkdownAndSnippet(t *testing.T) {
 	contents := []byte("---\n" +
-		"cairn_article_id: \"art_1\"\n" +
+		"moss_article_id: \"art_1\"\n" +
 		"title: \"Decision\\\" title\"\n" +
 		"slug: \"decision\"\n" +
 		"summary: \"A summary\"\n" +
@@ -38,8 +38,8 @@ func TestParseManagedMarkdownAndSnippet(t *testing.T) {
 func TestParseManagedMarkdownRejectsMalformedMetadata(t *testing.T) {
 	for _, contents := range [][]byte{
 		[]byte("plain text"),
-		[]byte("---\ncairn_article_id: \"art_1\"\n---\n\nbody\n"),
-		[]byte("---\ncairn_article_id: \"art_1\"\ntitle: \"Title\"\nslug: \"title\"\nsummary: \"Summary\"\nsensitivity: normal\nversion: nope\n---\n\nbody\n"),
+		[]byte("---\nmoss_article_id: \"art_1\"\n---\n\nbody\n"),
+		[]byte("---\nmoss_article_id: \"art_1\"\ntitle: \"Title\"\nslug: \"title\"\nsummary: \"Summary\"\nsensitivity: normal\nversion: nope\n---\n\nbody\n"),
 	} {
 		if _, err := parseManagedMarkdown(contents); err == nil {
 			t.Fatalf("malformed content accepted: %q", contents)

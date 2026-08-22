@@ -4,7 +4,7 @@
 TBD - created by archiving change cairn-spec-baseline. Update Purpose after archive.
 ## Requirements
 ### Requirement: User-home data layout
-Moss SHALL initialize its default data root at `~/.cairn` for upgrade compatibility and SHALL create separate database, Raw, Wiki, Job, response, backup, trash, and lock areas with permissions restricted to the current user. An explicit `MOSS_DATA_DIR` environment override MAY select another data root for controlled runtime use; `CAIRN_DATA_DIR` remains a legacy alias.
+Moss SHALL initialize its default data root at `~/.moss` and SHALL create separate database, Raw, Wiki, Job, response, backup, trash, and lock areas with permissions restricted to the current user. An explicit `MOSS_DATA_DIR` environment override MAY select another data root for controlled runtime use. Existing `~/.cairn` data is not automatically migrated or read.
 
 #### Scenario: First initialization
 - **WHEN** a supported operation runs against a missing data root

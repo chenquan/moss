@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	backupFormat       = "cairn-backup/v1"
-	backupExtension    = ".cairn-backup.zip"
+	backupFormat       = "moss-backup/v1"
+	backupExtension    = ".moss-backup.zip"
 	maxBackupEntries   = 100000
 	maxBackupBytes     = 4 << 30
 	maxBackupFileBytes = 2 << 30
@@ -254,7 +254,7 @@ func createBackup(ctx context.Context, store *storage.Storage, archivePath, back
 		return backupInfo{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create backup staging directory", true, nil)
 	}
 	defer os.RemoveAll(workDir)
-	databaseSnapshot := filepath.Join(workDir, "database", "cairn.db")
+	databaseSnapshot := filepath.Join(workDir, "database", "moss.db")
 	if err := os.MkdirAll(filepath.Dir(databaseSnapshot), 0700); err != nil {
 		return backupInfo{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create database backup directory", true, nil)
 	}
@@ -262,7 +262,7 @@ func createBackup(ctx context.Context, store *storage.Storage, archivePath, back
 		return backupInfo{}, protocol.NewCodedError("BACKUP_FAILED", "cannot create SQLite backup snapshot", true, nil)
 	}
 	entries := make([]backupEntry, 0, 64)
-	databaseEntry, err := fileEntry(databaseSnapshot, "database/cairn.db")
+	databaseEntry, err := fileEntry(databaseSnapshot, "database/moss.db")
 	if err != nil {
 		return backupInfo{}, protocol.NewCodedError("BACKUP_FAILED", "cannot hash SQLite backup snapshot", true, nil)
 	}
@@ -531,8 +531,8 @@ func extractAndValidateBackup(archivePath, backupRoot string) (extractedBackup, 
 	if len(seen)-1 != len(manifestPaths) {
 		return extractedBackup{}, protocol.NewCodedError("BACKUP_INVALID", "archive entries do not match the manifest", false, nil)
 	}
-	databasePath := filepath.Join(stage, "database", "cairn.db")
-	if _, ok := manifestPaths["database/cairn.db"]; !ok {
+	databasePath := filepath.Join(stage, "database", "moss.db")
+	if _, ok := manifestPaths["database/moss.db"]; !ok {
 		return extractedBackup{}, protocol.NewCodedError("BACKUP_INVALID", "backup does not contain a database snapshot", false, nil)
 	}
 	if err := validateSnapshotDatabase(databasePath); err != nil {
@@ -621,20 +621,20 @@ func swapRestoredState(paths storage.Paths, stage, oldDir string) *protocol.Code
 	if err := os.MkdirAll(oldDir, 0700); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create restore rollback directory", true, nil)
 	}
-	names := []string{"cairn.db", "raw", "wiki", "jobs", "trash"}
+	names := []string{"moss.db", "raw", "wiki", "jobs", "trash"}
 	completed := make([]string, 0, len(names))
 	for _, name := range names {
 		active := filepath.Join(paths.Root, name)
 		staged := filepath.Join(stage, name)
-		if name == "cairn.db" {
-			staged = filepath.Join(stage, "database", "cairn.db")
+		if name == "moss.db" {
+			staged = filepath.Join(stage, "database", "moss.db")
 		}
 		old := filepath.Join(oldDir, name)
 		if _, err := os.Lstat(active); err != nil {
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "active restore target is unavailable", true, nil)
 		}
 		if _, err := os.Lstat(staged); errors.Is(err, os.ErrNotExist) {
-			if name == "cairn.db" {
+			if name == "moss.db" {
 				return protocol.NewCodedError("BACKUP_INVALID", "restore database snapshot is missing", false, nil)
 			}
 			if err := os.MkdirAll(staged, 0700); err != nil {
@@ -656,7 +656,7 @@ func swapRestoredState(paths storage.Paths, stage, oldDir string) *protocol.Code
 }
 
 func rollbackRestoredState(paths storage.Paths, oldDir string) *protocol.CodedError {
-	names := []string{"cairn.db", "raw", "wiki", "jobs", "trash"}
+	names := []string{"moss.db", "raw", "wiki", "jobs", "trash"}
 	for i := len(names) - 1; i >= 0; i-- {
 		name := names[i]
 		active := filepath.Join(paths.Root, name)
@@ -708,7 +708,7 @@ func resolveExistingBackupPath(root, requested string) (string, *protocol.CodedE
 
 func allowedBackupEntry(path string) bool {
 	path = filepath.ToSlash(path)
-	if path == "database/cairn.db" {
+	if path == "database/moss.db" {
 		return true
 	}
 	for _, prefix := range []string{"raw/", "wiki/", "jobs/", "trash/"} {

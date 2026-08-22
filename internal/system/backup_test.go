@@ -7,7 +7,7 @@ import (
 
 func TestBackupPathAndArchiveEntryGuards(t *testing.T) {
 	root := t.TempDir()
-	if path, err := resolveBackupPath(root, "daily.cairn-backup.zip", "backup-id"); err != nil || path != filepath.Join(root, "daily.cairn-backup.zip") {
+	if path, err := resolveBackupPath(root, "daily.moss-backup.zip", "backup-id"); err != nil || path != filepath.Join(root, "daily.moss-backup.zip") {
 		t.Fatalf("valid backup path = %q, %v", path, err)
 	}
 	for _, value := range []string{"../outside.zip", filepath.Join(root, "..", "outside.zip"), "daily.tar", "nested/daily.zip"} {
@@ -15,12 +15,12 @@ func TestBackupPathAndArchiveEntryGuards(t *testing.T) {
 			t.Fatalf("unsafe backup path accepted: %q", value)
 		}
 	}
-	for _, value := range []string{"../database/cairn.db", "/absolute", "raw/../wiki/a.md", "raw\\a"} {
+	for _, value := range []string{"../database/moss.db", "/absolute", "raw/../wiki/a.md", "raw\\a"} {
 		if !hasParentPath(value) && !filepath.IsAbs(value) && value != "raw\\a" {
 			t.Fatalf("parent path was not detected: %q", value)
 		}
 	}
-	for _, value := range []string{"database/cairn.db", "raw/blobs/a.raw", "wiki/articles/a.md", "jobs/j/output.json", "trash/old.md"} {
+	for _, value := range []string{"database/moss.db", "raw/blobs/a.raw", "wiki/articles/a.md", "jobs/j/output.json", "trash/old.md"} {
 		if !allowedBackupEntry(value) {
 			t.Fatalf("allowed entry rejected: %q", value)
 		}

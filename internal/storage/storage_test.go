@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestResolvePathsDefaultsToUserHomeLegacyDataRoot(t *testing.T) {
+func TestResolvePathsDefaultsToUserHomeMossDataRoot(t *testing.T) {
 	chdirForTest(t, t.TempDir())
 	t.Setenv("MOSS_DATA_DIR", "")
 	t.Setenv("CAIRN_DATA_DIR", "")
@@ -19,11 +19,11 @@ func TestResolvePathsDefaultsToUserHomeLegacyDataRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantRoot := filepath.Join(home, ".cairn")
+	wantRoot := filepath.Join(home, ".moss")
 	if paths.Root != wantRoot {
 		t.Fatalf("default root = %q, want %q", paths.Root, wantRoot)
 	}
-	if paths.Database != filepath.Join(wantRoot, "cairn.db") {
+	if paths.Database != filepath.Join(wantRoot, "moss.db") {
 		t.Fatalf("default database = %q", paths.Database)
 	}
 }
@@ -44,7 +44,7 @@ func TestResolvePathsHonorsExplicitDataDirectory(t *testing.T) {
 	}
 }
 
-func TestResolvePathsHonorsLegacyDataDirectory(t *testing.T) {
+func TestResolvePathsIgnoresLegacyDataDirectory(t *testing.T) {
 	workingDirectory := t.TempDir()
 	chdirForTest(t, workingDirectory)
 	legacy := filepath.Join(workingDirectory, "legacy-data")
@@ -55,8 +55,13 @@ func TestResolvePathsHonorsLegacyDataDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if paths.Root != legacy {
-		t.Fatalf("legacy override root = %q, want %q", paths.Root, legacy)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := filepath.Join(home, ".moss")
+	if paths.Root != wantRoot {
+		t.Fatalf("legacy override root = %q, want default %q", paths.Root, wantRoot)
 	}
 }
 

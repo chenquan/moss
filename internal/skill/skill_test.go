@@ -27,7 +27,7 @@ func TestMossSkillIsExplicitOnlyAndRoutesProtocol(t *testing.T) {
 			t.Fatalf("Skill missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"cairn-cli", "cairn call", "name: cairn", "--request", "--response", "request/response", "assistant today", "assistant search", "assistant wiki list", "assistant commitment add", "assistant compile preview"} {
+	for _, forbidden := range []string{"cairn-cli", "cairn call", "name: cairn", ".cairn", "CAIRN_DATA_DIR", "--request", "--response", "request/response", "assistant today", "assistant search", "assistant wiki list", "assistant commitment add", "assistant compile preview"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("Skill contains removed human CLI wording %q", forbidden)
 		}

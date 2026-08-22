@@ -135,7 +135,7 @@ func TestSystemExportRestoreAndIdempotency(t *testing.T) {
 	if response := runRequest(t, dir, needsConfirmation); response.OK || response.Error == nil || response.Error.Code != "CONFIRMATION_REQUIRED" {
 		t.Fatalf("restore confirmation = %+v", response)
 	}
-	tamperedPath := filepath.Join(dir, "data", "backups", "tampered.cairn-backup.zip")
+	tamperedPath := filepath.Join(dir, "data", "backups", "tampered.moss-backup.zip")
 	archiveBytes, err := os.ReadFile(backupPath)
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +392,7 @@ func TestHealthReportsRecoveryAndCorruptStorage(t *testing.T) {
 	if err := os.Remove(staging); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "data", "cairn.db"), []byte("not sqlite"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "data", "moss.db"), []byte("not sqlite"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	health.RequestID = "req-health-corrupt"
@@ -508,7 +508,7 @@ func TestCompilePreviewApplyAndUndo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(article), "cairn_article_id:") || !strings.HasSuffix(string(article), "internal CLI.\n") {
+	if !strings.Contains(string(article), "moss_article_id:") || !strings.HasSuffix(string(article), "internal CLI.\n") {
 		t.Fatalf("unexpected article content: %s", article)
 	}
 
@@ -725,7 +725,7 @@ func TestKnowledgeRetrievalCatalogCandidatesMaterializeAndHistory(t *testing.T) 
 	}
 
 	dataDir := filepath.Join(dir, "data")
-	t.Setenv("CAIRN_DATA_DIR", dataDir)
+	t.Setenv("MOSS_DATA_DIR", dataDir)
 	store, err := storage.Open(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -821,7 +821,7 @@ func TestActionLedgerPlansApplyQueryAndConcurrency(t *testing.T) {
 	}
 	expiredPlanResponse := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-action-expired-plan", Operation: "action.create.plan", Actor: actor, Arguments: map[string]json.RawMessage{"kind": json.RawMessage(`"reminder"`), "title": json.RawMessage(`"Expired reminder"`)}, IdempotencyKey: "idem-action-expired-plan"})
 	expiredPlanID := expiredPlanResponse.Data.(map[string]any)["plan_id"].(string)
-	t.Setenv("CAIRN_DATA_DIR", filepath.Join(dir, "data"))
+	t.Setenv("MOSS_DATA_DIR", filepath.Join(dir, "data"))
 	store, err := storage.Open(context.Background())
 	if err != nil {
 		t.Fatal(err)
