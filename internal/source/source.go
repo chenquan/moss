@@ -280,11 +280,13 @@ func MarkSensitive(ctx context.Context, store *storage.Storage, req protocol.Req
 	}
 	data := markSensitiveData{SourceID: args.SourceID, PreviousSensitivity: previous, Sensitivity: args.Sensitivity, Changed: previous != args.Sensitivity, PropagatedArticleIDs: make([]string, 0), PropagatedActionIDs: make([]string, 0)}
 	projections := make([]articleSensitivityProjection, 0)
+	markerPath := filepath.Join(store.Paths.Staging, "sensitivity-"+args.SourceID+".json")
 	committed := false
 	defer func() {
 		if committed {
 			return
 		}
+		_ = os.Remove(markerPath)
 		for _, projection := range projections {
 			_ = os.WriteFile(projection.path, projection.oldContent, 0600)
 			if projection.newContent != nil {
@@ -340,10 +342,13 @@ func MarkSensitive(ctx context.Context, store *storage.Storage, req protocol.Req
 					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot stage propagated article", true, nil)
 				}
 				projection := articleSensitivityProjection{id: articleID, path: articlePath, oldContent: oldContent, newContent: newContent, oldVersion: article.Version, oldHash: articleContentHash(oldContent), oldSensitivity: article.Sensitivity, newVersion: nextVersion, newHash: articleContentHash(newContent), article: rewritten}
+				projections = append(projections, projection)
+				if err := writeSensitivityRecoveryMarker(markerPath, args.SourceID, previous, args.Sensitivity, projections); err != nil {
+					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create sensitivity recovery marker", true, nil)
+				}
 				if err := os.Rename(stagePath, articlePath); err != nil {
 					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot replace propagated article", true, nil)
 				}
-				projections = append(projections, projection)
 				data.PropagatedArticleIDs = append(data.PropagatedArticleIDs, articleID)
 			}
 			for _, projection := range projections {
@@ -403,7 +408,39 @@ func MarkSensitive(ctx context.Context, store *storage.Storage, req protocol.Req
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot commit source sensitivity", true, nil)
 	}
 	committed = true
+	_ = os.Remove(markerPath)
 	return response, nil
+}
+
+func writeSensitivityRecoveryMarker(path, sourceID, before, after string, projections []articleSensitivityProjection) error {
+	items := make([]map[string]any, 0, len(projections))
+	for _, projection := range projections {
+		items = append(items, map[string]any{"path": projection.path, "before_hash": projection.oldHash, "after_hash": projection.newHash, "before_content": string(projection.oldContent)})
+	}
+	contents, err := json.Marshal(map[string]any{"kind": "sensitivity", "source_id": sourceID, "before_sensitivity": before, "after_sensitivity": after, "articles": items})
+	if err != nil {
+		return err
+	}
+	return writePrivateSourceFile(path, contents)
+}
+
+func writePrivateSourceFile(path string, contents []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(contents); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func Get(ctx context.Context, store *storage.Storage, req protocol.Request) (any, *protocol.CodedError) {

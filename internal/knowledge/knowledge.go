@@ -398,14 +398,15 @@ type materializedData struct {
 }
 
 type historyVersion struct {
-	Version   int        `json:"version"`
-	Hash      string     `json:"hash"`
-	Path      string     `json:"path"`
-	Bytes     int64      `json:"bytes"`
-	JobID     string     `json:"job_id,omitempty"`
-	CreatedAt string     `json:"created_at"`
-	Citations []citation `json:"citations"`
-	Content   string     `json:"content,omitempty"`
+	Version     int        `json:"version"`
+	Hash        string     `json:"hash"`
+	Path        string     `json:"path"`
+	Sensitivity string     `json:"sensitivity"`
+	Bytes       int64      `json:"bytes"`
+	JobID       string     `json:"job_id,omitempty"`
+	CreatedAt   string     `json:"created_at"`
+	Citations   []citation `json:"citations"`
+	Content     string     `json:"content,omitempty"`
 }
 
 type historyData struct {
@@ -660,11 +661,18 @@ func History(ctx context.Context, store *storage.Storage, req protocol.Request) 
 		if hashBytes([]byte(content)) != contentHash {
 			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "article history content hash is invalid", false, map[string]any{"article_id": row.ArticleID, "version": version})
 		}
+		parsed, parseErr := ParseManagedArticle([]byte(content))
+		if parseErr != nil || parsed.ArticleID != row.ArticleID || parsed.Version != version {
+			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "article history metadata is invalid", false, map[string]any{"article_id": row.ArticleID, "version": version})
+		}
+		if !sensitivityAllowed(parsed.Sensitivity, allowSensitive) {
+			return nil, protocol.NewCodedError("SENSITIVITY_DENIED", "article history contains sensitive content", false, map[string]any{"article_id": row.ArticleID, "version": version})
+		}
 		citations, codedErr := loadCitations(ctx, store.DB, row.ArticleID, version)
 		if codedErr != nil {
 			return nil, codedErr
 		}
-		item := historyVersion{Version: version, Hash: contentHash, Path: path, Bytes: int64(len(content)), JobID: jobID, CreatedAt: createdAt, Citations: citations}
+		item := historyVersion{Version: version, Hash: contentHash, Path: path, Sensitivity: parsed.Sensitivity, Bytes: int64(len(content)), JobID: jobID, CreatedAt: createdAt, Citations: citations}
 		if args.IncludeContent {
 			if len(content) > maxArticleBytes {
 				return nil, protocol.NewCodedError("ARTICLE_TOO_LARGE", "historical article exceeds the retrieval size limit", false, nil)

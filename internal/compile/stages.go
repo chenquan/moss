@@ -142,6 +142,7 @@ func Submit(ctx context.Context, store *storage.Storage, req protocol.Request) (
 	var extractionIDs []string
 	var extractionExisting []bool
 	var extractionContents [][]byte
+	var invalidExtractionIDs []string
 	var extractionFP pipelineFingerprint
 	if args.Stage == "extract" {
 		var pipelineJSON []byte
@@ -207,6 +208,7 @@ func Submit(ctx context.Context, store *storage.Storage, req protocol.Request) (
 				artifact, readErr := os.ReadFile(managedPath)
 				if !within(managedPath, store.Paths.Extractions) || statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || readErr != nil || hashBytes(artifact) != extractionHash || extractionHash != itemHash {
 					existing = false
+					invalidExtractionIDs = append(invalidExtractionIDs, extractionID)
 				}
 			}
 			if !existing {
@@ -247,6 +249,11 @@ func Submit(ctx context.Context, store *storage.Storage, req protocol.Request) (
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if args.Stage == "extract" {
+		for _, extractionID := range invalidExtractionIDs {
+			if _, err := tx.ExecContext(ctx, `UPDATE extractions SET status = 'stale' WHERE extraction_id = ? AND status = 'active'`, extractionID); err != nil {
+				return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot stale invalid extraction", true, nil)
+			}
+		}
 		rows, err := tx.QueryContext(ctx, `SELECT cjs.source_id, s.content_hash FROM compile_job_sources cjs JOIN sources s ON s.source_id = cjs.source_id WHERE cjs.job_id = ? ORDER BY cjs.ordinal`, args.JobID)
 		if err != nil {
 			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read extraction source set", true, nil)
@@ -272,6 +279,9 @@ func Submit(ctx context.Context, store *storage.Storage, req protocol.Request) (
 				return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot register extraction artifact", true, nil)
 			}
 			ordinal++
+		}
+		if err := rows.Err(); err != nil {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish extraction source read", true, nil)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE compile_stages SET status = 'submitted', result_hash = ?, submitted_at = ? WHERE job_id = ? AND stage = ?`, resultHash, now, args.JobID, args.Stage); err != nil {
@@ -370,14 +380,20 @@ func Abort(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 
 func validateReferences(ctx context.Context, store *storage.Storage, stage string, contents []byte, jobID, sourceID string) *protocol.CodedError {
 	allowed := map[string]bool{sourceID: true}
-	if rows, err := store.DB.QueryContext(ctx, `SELECT source_id FROM compile_job_sources WHERE job_id = ?`, jobID); err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if rows.Scan(&id) == nil {
-				allowed[id] = true
-			}
+	rows, err := store.DB.QueryContext(ctx, `SELECT source_id FROM compile_job_sources WHERE job_id = ?`, jobID)
+	if err != nil {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read compile source references", true, nil)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode compile source reference", true, nil)
 		}
+		allowed[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish compile source reference read", true, nil)
 	}
 	check := func(ids []string) *protocol.CodedError {
 		for _, id := range ids {

@@ -29,6 +29,8 @@ const (
 	planLifetime          = 24 * time.Hour
 )
 
+var errSensitiveCompileContext = errors.New("sensitive compile context")
+
 type startArguments struct {
 	SourceID  string              `json:"source_id,omitempty"`
 	SourceIDs []string            `json:"source_ids,omitempty"`
@@ -43,8 +45,8 @@ type pipelineFingerprint struct {
 }
 
 type compileSource struct {
-	id, hash, rawPath string
-	size              int64
+	id, hash, rawPath, sensitivity string
+	size                           int64
 }
 
 type jobArguments struct {
@@ -131,6 +133,10 @@ func Start(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 	if len(sourceIDs) > 100 {
 		return protocol.Response{}, protocol.NewCodedError("REQUEST_INVALID", "source_ids cannot contain more than 100 sources", false, nil)
 	}
+	allowSensitive, codedErr := protocol.OptionBool(req, "allow_sensitive")
+	if codedErr != nil {
+		return protocol.Response{}, codedErr
+	}
 	fingerprint, err := req.Fingerprint()
 	if err != nil {
 		return protocol.Response{}, protocol.NewCodedError("REQUEST_INVALID", "cannot fingerprint request", false, nil)
@@ -144,12 +150,15 @@ func Start(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 	sources := make([]compileSource, 0, len(sourceIDs))
 	for _, sourceID := range sourceIDs {
 		var item compileSource
-		err = store.DB.QueryRowContext(ctx, `SELECT s.content_hash, s.byte_size, b.raw_path FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.source_id = ? AND s.forgotten_at IS NULL`, sourceID).Scan(&item.hash, &item.size, &item.rawPath)
+		err = store.DB.QueryRowContext(ctx, `SELECT s.content_hash, s.byte_size, b.raw_path, s.sensitivity FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.source_id = ? AND s.forgotten_at IS NULL`, sourceID).Scan(&item.hash, &item.size, &item.rawPath, &item.sensitivity)
 		if errors.Is(err, sql.ErrNoRows) {
 			return protocol.Response{}, protocol.NewCodedError("SOURCE_NOT_FOUND", "source was not found", false, map[string]any{"source_id": sourceID})
 		}
 		if err != nil {
 			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read compile source", true, nil)
+		}
+		if !allowSensitive && item.sensitivity != "normal" {
+			return protocol.Response{}, protocol.NewCodedError("SENSITIVITY_DENIED", "compile source requires sensitive-content permission", false, map[string]any{"source_id": sourceID, "sensitivity": item.sensitivity})
 		}
 		item.id = sourceID
 		sources = append(sources, item)
@@ -163,7 +172,10 @@ func Start(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 	}
 	jobID := newID("job")
 	jobRoot := filepath.Join(store.Paths.Jobs, jobID)
-	if err := initializeJobFiles(store, jobRoot, sources); err != nil {
+	if err := initializeJobFiles(store, jobRoot, sources, allowSensitive); err != nil {
+		if errors.Is(err, errSensitiveCompileContext) {
+			return protocol.Response{}, protocol.NewCodedError("SENSITIVITY_DENIED", "compile context requires sensitive-content permission", false, nil)
+		}
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot initialize compile job files", true, nil)
 	}
 	stages := makeStageReferences(jobRoot, store.Paths.Root, len(sources) > 1)
@@ -265,18 +277,19 @@ func loadJob(ctx context.Context, store *storage.Storage, jobID string) (jobResp
 		return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "compile pipeline metadata is invalid", false, nil)
 	}
 	rowsSources, err := store.DB.QueryContext(ctx, `SELECT source_id FROM compile_job_sources WHERE job_id = ? ORDER BY ordinal ASC`, jobID)
-	if err == nil {
-		defer rowsSources.Close()
-		for rowsSources.Next() {
-			var sourceID string
-			if err := rowsSources.Scan(&sourceID); err != nil {
-				return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode compile source set", true, nil)
-			}
-			result.SourceIDs = append(result.SourceIDs, sourceID)
+	if err != nil {
+		return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read compile source set", true, nil)
+	}
+	defer rowsSources.Close()
+	for rowsSources.Next() {
+		var sourceID string
+		if err := rowsSources.Scan(&sourceID); err != nil {
+			return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode compile source set", true, nil)
 		}
-		if err := rowsSources.Err(); err != nil {
-			return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish compile source set read", true, nil)
-		}
+		result.SourceIDs = append(result.SourceIDs, sourceID)
+	}
+	if err := rowsSources.Err(); err != nil {
+		return jobResponse{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish compile source set read", true, nil)
 	}
 	if len(result.SourceIDs) == 0 {
 		result.SourceIDs = []string{result.SourceID}
@@ -303,7 +316,7 @@ func loadJob(ctx context.Context, store *storage.Storage, jobID string) (jobResp
 	return result, nil
 }
 
-func initializeJobFiles(store *storage.Storage, jobRoot string, sources []compileSource) error {
+func initializeJobFiles(store *storage.Storage, jobRoot string, sources []compileSource, allowSensitive bool) error {
 	for _, dir := range []string{"input", "schemas", "output"} {
 		if err := os.MkdirAll(filepath.Join(jobRoot, dir), 0700); err != nil {
 			return err
@@ -328,7 +341,7 @@ func initializeJobFiles(store *storage.Storage, jobRoot string, sources []compil
 			return err
 		}
 	}
-	if err := writeCompileContext(store, jobRoot, sources); err != nil {
+	if err := writeCompileContext(store, jobRoot, sources, allowSensitive); err != nil {
 		return err
 	}
 	hashes := make([]string, 0, len(sources))
@@ -353,7 +366,7 @@ func makeStageReferences(jobRoot, dataRoot string, multi bool) []stageReference 
 	}
 }
 
-func writeCompileContext(store *storage.Storage, jobRoot string, sources []compileSource) error {
+func writeCompileContext(store *storage.Storage, jobRoot string, sources []compileSource, allowSensitive bool) error {
 	allowed := make(map[string]bool, len(sources))
 	for _, source := range sources {
 		allowed[source.id] = true
@@ -385,12 +398,23 @@ func writeCompileContext(store *storage.Storage, jobRoot string, sources []compi
 		}
 		for citationRows.Next() {
 			var sourceID string
-			if citationRows.Scan(&sourceID) == nil && allowed[sourceID] {
+			if err := citationRows.Scan(&sourceID); err != nil {
+				citationRows.Close()
+				return err
+			}
+			if allowed[sourceID] {
 				a.SourceIDs = append(a.SourceIDs, sourceID)
 			}
 		}
+		if err := citationRows.Err(); err != nil {
+			citationRows.Close()
+			return err
+		}
 		citationRows.Close()
 		if len(a.SourceIDs) > 0 {
+			if !allowSensitive && a.Sensitivity != "normal" {
+				return fmt.Errorf("%w: article %s requires sensitive-content permission", errSensitiveCompileContext, a.ArticleID)
+			}
 			articles = append(articles, a)
 		}
 	}
@@ -416,9 +440,17 @@ func writeCompileContext(store *storage.Storage, jobRoot string, sources []compi
 		}
 		for citationRows.Next() {
 			var sourceID string
-			if citationRows.Scan(&sourceID) == nil && allowed[sourceID] {
+			if err := citationRows.Scan(&sourceID); err != nil {
+				citationRows.Close()
+				return err
+			}
+			if allowed[sourceID] {
 				f.SourceIDs = append(f.SourceIDs, sourceID)
 			}
+		}
+		if err := citationRows.Err(); err != nil {
+			citationRows.Close()
+			return err
 		}
 		citationRows.Close()
 		if len(f.SourceIDs) > 0 {

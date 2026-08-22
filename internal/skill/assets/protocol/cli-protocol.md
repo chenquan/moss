@@ -76,7 +76,7 @@ Large materialized articles or archives may be returned as a managed path with a
 
 The supported operation families are:
 
-- System: `system.handshake`, `system.health`, `system.capabilities`, `system.export`, `system.restore`
+- System: `system.handshake`, `system.health`, `system.capabilities`, `system.export`, `system.restore`, `system.recover`
 - Sources: `source.ingest`, `source.get`, `source.list`, `source.mark_sensitive`, `source.forget.plan`
 - Compile jobs: `compile.start`, `compile.next`, `compile.submit`, `compile.status`, `compile.preview`, `compile.apply`, `compile.abort`
 - Knowledge: `knowledge.catalog`, `knowledge.candidates`, `knowledge.materialize`, `knowledge.history`, `knowledge.reindex`, `knowledge.backfill.plan`, `knowledge.rollback.plan`

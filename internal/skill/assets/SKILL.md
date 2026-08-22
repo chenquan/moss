@@ -49,7 +49,7 @@ Use this route before selecting an operation:
 | Create or change a task, commitment, or reminder | `action.create.plan`/`action.update.plan` → confirmed `action.apply`; use `action.query` for status questions |
 | Forget sources or a project | `source.forget.plan` → `plan.inspect` → explicit confirmation → confirmed `plan.apply` |
 | Roll back an article or undo a safety plan | `knowledge.history` → `knowledge.rollback.plan` → explicit confirmation → `plan.apply`; use `plan.undo` only for an unchanged applied safety plan |
-| Check or maintain Moss | During installation/upgrade/repair: `system.handshake` → `system.health`; use `system.export` before upgrades and confirmed `system.restore` only during recovery |
+| Check or maintain Moss | During installation/upgrade/repair: `system.handshake` → `system.health`; use `system.recover` for reported interrupted mutations, and `system.export` before upgrades with confirmed `system.restore` only during recovery |
 
 If the user's selector is ambiguous, ask for a narrower source/article/action selector before creating a plan. Preserve returned IDs when a workflow spans multiple turns.
 

@@ -77,6 +77,16 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 			return protocol.Response{ProtocolVersion: protocol.SupportedVersion, RequestID: req.RequestID, OK: false, Data: data, Error: &protocol.Error{Code: healthErr.Code, Message: healthErr.Message, Retryable: healthErr.Retryable, Details: healthErr.Details}}, healthErr
 		}
 		return protocol.NewSuccessResponse(req, data), nil
+	case "system.recover":
+		store, codedErr := openStorage(ctx)
+		if codedErr != nil {
+			return protocol.Response{}, codedErr
+		}
+		defer store.Close()
+		if codedErr := store.AcquireMutationLock(ctx); codedErr != nil {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "Moss mutation lock could not be acquired", true, nil)
+		}
+		return system.Recover(ctx, store, req)
 	case "system.export", "system.restore":
 		store, codedErr := openMutableStorage(ctx)
 		if codedErr != nil {
@@ -289,6 +299,10 @@ func openMutableStorage(ctx context.Context) (*storage.Storage, *protocol.CodedE
 	} else if health.Overall != "healthy" {
 		_ = store.Close()
 		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "mutating operations are unavailable until Moss storage is healthy", true, health)
+	}
+	if err := store.AcquireMutationLock(ctx); err != nil {
+		_ = store.Close()
+		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "Moss mutation lock could not be acquired", true, nil)
 	}
 	return store, nil
 }

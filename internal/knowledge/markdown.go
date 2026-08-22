@@ -90,7 +90,7 @@ func readManagedArticle(store *storage.Storage, row articleRow) (parsedArticle, 
 		return parsedArticle{}, nil, path, protocol.NewCodedError("WIKI_DRIFT", "managed article file differs from its recorded hash", false, map[string]any{"path": path, "expected_hash": row.Hash, "actual_hash": actualHash})
 	}
 	parsed, err := parseManagedMarkdown(contents)
-	if err != nil || parsed.ArticleID != row.ArticleID || parsed.Slug != row.Slug || parsed.Sensitivity != row.Sensitivity || parsed.Version != row.Version {
+	if err != nil || parsed.ArticleID != row.ArticleID || parsed.Slug != row.Slug || parsed.Title != row.Title || parsed.Sensitivity != row.Sensitivity || parsed.Version != row.Version {
 		return parsedArticle{}, nil, path, protocol.NewCodedError("WIKI_DRIFT", "managed article metadata does not match its recorded version", false, map[string]any{"path": path})
 	}
 	return parsed, contents, path, nil

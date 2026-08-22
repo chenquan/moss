@@ -181,7 +181,7 @@ func OptionBool(r Request, key string) (bool, *CodedError) {
 
 func IsMutating(operation string) bool {
 	switch operation {
-	case "source.ingest", "source.mark_sensitive", "compile.start", "compile.submit", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.undo", "action.create.plan", "action.update.plan", "action.apply", "source.forget.plan", "knowledge.rollback.plan", "knowledge.reindex", "knowledge.backfill.plan", "system.export", "system.restore":
+	case "source.ingest", "source.mark_sensitive", "compile.start", "compile.submit", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.undo", "action.create.plan", "action.update.plan", "action.apply", "source.forget.plan", "knowledge.rollback.plan", "knowledge.reindex", "knowledge.backfill.plan", "system.export", "system.restore", "system.recover":
 		return true
 	default:
 		return false
@@ -202,6 +202,7 @@ func SupportedCapabilities() []Capability {
 		{Operation: "system.handshake", Description: "Check Skill and CLI protocol compatibility"},
 		{Operation: "system.health", Description: "Validate local Moss storage and runtime health"},
 		{Operation: "system.restore", Mutating: true, Description: "Restore a confirmed local backup archive"},
+		{Operation: "system.recover", Mutating: true, Description: "Resolve an interrupted managed-file and SQLite mutation"},
 		{Operation: "plan.apply", Mutating: true, Description: "Apply a reviewed knowledge plan"},
 		{Operation: "plan.inspect", Description: "Inspect a knowledge plan"},
 		{Operation: "plan.undo", Mutating: true, Description: "Undo an applied knowledge plan"},

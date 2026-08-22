@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
@@ -65,6 +66,7 @@ func ResolvePaths() (Paths, error) {
 type Storage struct {
 	Paths Paths
 	DB    *sql.DB
+	lock  *os.File
 }
 
 func Open(ctx context.Context) (*Storage, error) {
@@ -103,7 +105,44 @@ func Open(ctx context.Context) (*Storage, error) {
 	return store, nil
 }
 
-func (s *Storage) Close() error { return s.DB.Close() }
+func (s *Storage) Close() error {
+	if s.lock != nil {
+		_ = unix.Flock(int(s.lock.Fd()), unix.LOCK_UN)
+		_ = s.lock.Close()
+		s.lock = nil
+	}
+	return s.DB.Close()
+}
+
+// AcquireMutationLock serializes every process that can coordinate managed
+// files with SQLite. The lock is held by the Storage lifetime so a request
+// cannot interleave a read/rename/transaction sequence with another process.
+func (s *Storage) AcquireMutationLock(ctx context.Context) error {
+	if s.lock != nil {
+		return nil
+	}
+	file, err := os.OpenFile(filepath.Join(s.Paths.Locks, "mutation.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return fmt.Errorf("open mutation lock: %w", err)
+	}
+	for {
+		err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			s.lock = file
+			return nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			_ = file.Close()
+			return fmt.Errorf("acquire mutation lock: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+			return ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
 
 func ensureLayout(paths Paths) error {
 	dirs := []string{paths.Root, paths.Raw, paths.Wiki, paths.Jobs, paths.Extractions, paths.Responses, paths.Backups, paths.Trash, paths.Locks, paths.Staging}

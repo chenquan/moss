@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenquan/moss/internal/knowledge"
 	"github.com/chenquan/moss/internal/protocol"
 	"github.com/chenquan/moss/internal/storage"
 )
@@ -615,7 +616,94 @@ func validateRestoredCore(ctx context.Context, store *storage.Storage) *protocol
 	if err := store.DB.QueryRowContext(ctx, `SELECT value FROM schema_meta WHERE key = 'schema_version'`).Scan(&version); err != nil || version != fmt.Sprint(storage.SchemaVersion) {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "restored database migration is incomplete", true, nil)
 	}
+	blobRows, err := store.DB.QueryContext(ctx, `SELECT content_hash, raw_path FROM blobs`)
+	if err != nil {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot inspect restored source blobs", true, nil)
+	}
+	for blobRows.Next() {
+		var expected, rawPath string
+		if err := blobRows.Scan(&expected, &rawPath); err != nil {
+			blobRows.Close()
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode restored source blob", true, nil)
+		}
+		path := restoredPath(store.Paths.Root, rawPath)
+		if !withinRecoveryPath(path, store.Paths.Raw) || !regularFile(path) || fileHash(path) != expected {
+			blobRows.Close()
+			return protocol.NewCodedError("BACKUP_INVALID", "restored source provenance is invalid", false, map[string]any{"path": rawPath})
+		}
+	}
+	if err := blobRows.Err(); err != nil {
+		blobRows.Close()
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish restored source blob validation", true, nil)
+	}
+	blobRows.Close()
+	articleRows, err := store.DB.QueryContext(ctx, `SELECT article_id, path, current_version, current_hash FROM articles WHERE forgotten_at IS NULL`)
+	if err != nil {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot inspect restored articles", true, nil)
+	}
+	for articleRows.Next() {
+		var articleID, articlePath, expected string
+		var version int
+		if err := articleRows.Scan(&articleID, &articlePath, &version, &expected); err != nil {
+			articleRows.Close()
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode restored article", true, nil)
+		}
+		path := restoredPath(store.Paths.Root, articlePath)
+		contents, readErr := os.ReadFile(path)
+		parsed, parseErr := knowledge.ParseManagedArticle(contents)
+		if !withinRecoveryPath(path, filepath.Join(store.Paths.Wiki, "articles")) || !regularFile(path) || readErr != nil || fileHash(path) != expected || parseErr != nil || parsed.ArticleID != articleID || parsed.Version != version {
+			articleRows.Close()
+			return protocol.NewCodedError("BACKUP_INVALID", "restored article provenance is invalid", false, map[string]any{"article_id": articleID})
+		}
+	}
+	if err := articleRows.Err(); err != nil {
+		articleRows.Close()
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish restored article validation", true, nil)
+	}
+	articleRows.Close()
+	extractionRows, err := store.DB.QueryContext(ctx, `SELECT extraction_id, path, content_hash FROM extractions`)
+	if err != nil {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot inspect restored extractions", true, nil)
+	}
+	for extractionRows.Next() {
+		var extractionID, extractionPath, expected string
+		if err := extractionRows.Scan(&extractionID, &extractionPath, &expected); err != nil {
+			extractionRows.Close()
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode restored extraction", true, nil)
+		}
+		path := restoredPath(store.Paths.Root, extractionPath)
+		if !withinRecoveryPath(path, store.Paths.Extractions) || !regularFile(path) || fileHash(path) != expected {
+			extractionRows.Close()
+			return protocol.NewCodedError("BACKUP_INVALID", "restored extraction provenance is invalid", false, map[string]any{"extraction_id": extractionID})
+		}
+	}
+	if err := extractionRows.Err(); err != nil {
+		extractionRows.Close()
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish restored extraction validation", true, nil)
+	}
+	extractionRows.Close()
 	return nil
+}
+
+func regularFile(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular()
+}
+
+func fileHash(path string) string {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(contents)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func restoredPath(root, value string) string {
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	return filepath.Join(root, filepath.FromSlash(value))
 }
 
 func swapRestoredState(paths storage.Paths, stage, oldDir string) *protocol.CodedError {

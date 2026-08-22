@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenquan/moss/internal/knowledge"
 	"github.com/chenquan/moss/internal/protocol"
 	"github.com/chenquan/moss/internal/storage"
 )
@@ -284,7 +285,13 @@ func Apply(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 	}
 	markerPath := filepath.Join(store.Paths.Staging, record.ID+".json")
 	stagedPath := filepath.Join(store.Paths.Staging, record.ID+".md")
-	marker := map[string]any{"plan_id": record.ID, "target": article.Path, "staged": stagedPath, "kind": record.Kind}
+	marker := map[string]any{"plan_id": record.ID, "target": article.Path, "staged": stagedPath, "kind": record.Kind, "phase": "prepared"}
+	if record.Kind == "update" && record.PreviousContent.Valid {
+		marker["article_id"] = record.ArticleID
+		marker["before_hash"] = record.BaseHash
+		marker["after_hash"] = record.ProposedHash
+		marker["before_content"] = record.PreviousContent.String
+	}
 	markerBytes, _ := json.Marshal(marker)
 	if err := writePrivateFile(markerPath, markerBytes); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create recovery marker", true, nil)
@@ -322,6 +329,10 @@ func Apply(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot atomically replace managed article", true, nil)
 	}
 	cleanupBeforeRename = false
+	marker["phase"] = "renamed"
+	if updatedMarker, marshalErr := json.Marshal(marker); marshalErr == nil {
+		_ = writePrivateFile(markerPath, updatedMarker)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if record.Kind == "create" {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO articles(article_id, slug, title, path, sensitivity, current_version, current_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ArticleID, record.Diff.Slug, record.Diff.AfterTitle, article.Path, record.Diff.AfterSensitivity, record.ProposedVersion, record.ProposedHash, now, now); err != nil {
@@ -409,7 +420,14 @@ func Undo(ctx context.Context, store *storage.Storage, req protocol.Request) (pr
 	}
 	markerPath := filepath.Join(store.Paths.Staging, record.ID+"-undo.json")
 	stagedPath := filepath.Join(store.Paths.Staging, record.ID+"-undo.md")
-	markerBytes, _ := json.Marshal(map[string]any{"plan_id": record.ID, "target": article.Path, "kind": record.Kind, "undo": true})
+	marker := map[string]any{"plan_id": record.ID, "target": article.Path, "kind": record.Kind, "undo": true, "phase": "prepared"}
+	if record.Kind == "update" && record.PreviousContent.Valid {
+		marker["article_id"] = record.ArticleID
+		marker["before_hash"] = record.ProposedHash
+		marker["after_hash"] = record.BaseHash
+		marker["before_content"] = record.ProposedContent
+	}
+	markerBytes, _ := json.Marshal(marker)
 	if err := writePrivateFile(markerPath, markerBytes); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create undo recovery marker", true, nil)
 	}
@@ -440,6 +458,10 @@ func Undo(ctx context.Context, store *storage.Storage, req protocol.Request) (pr
 		}
 	}
 	cleanupBeforeRename = false
+	marker["phase"] = "renamed"
+	if updatedMarker, marshalErr := json.Marshal(marker); marshalErr == nil {
+		_ = writePrivateFile(markerPath, updatedMarker)
+	}
 	tx, err := store.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot begin undo transaction", true, nil)
@@ -473,7 +495,11 @@ func Undo(ctx context.Context, store *storage.Storage, req protocol.Request) (pr
 		if record.PreviousContent.Valid {
 			previous = record.PreviousContent.String
 		}
-		if err := storage.ReplaceArticleIndexTx(ctx, tx, record.ArticleID, record.BaseVersion, record.Diff.BeforeTitle, record.Diff.Slug, "", "", previous, ""); err != nil {
+		parsed, err := knowledge.ParseManagedArticle([]byte(previous))
+		if err != nil || parsed.ArticleID != record.ArticleID || parsed.Version != record.BaseVersion {
+			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "previous article projection is invalid", false, nil)
+		}
+		if err := storage.ReplaceArticleIndexTx(ctx, tx, record.ArticleID, record.BaseVersion, parsed.Title, parsed.Slug, strings.Join(parsed.Tags, " "), parsed.Summary, parsed.Body, strings.Join(parsed.SourceIDs, " ")); err != nil {
 			return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore article index", true, nil)
 		}
 	}

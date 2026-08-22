@@ -37,6 +37,7 @@ Use this shape for every request. `arguments` is always an object, even when it 
 | --- | --- | --- | --- |
 | Check compatibility | `system.handshake` | none | read-only |
 | Check local health | `system.health` | none | read-only |
+| Resolve interrupted mutation | `system.recover` | recovery marker ID | **MUTATING**; use only for a marker reported by `system.health`, never delete or edit markers directly |
 | Discover capabilities | `system.capabilities` | none | read-only |
 | Remember a file | `source.ingest` | `input_file`, `source_type`, `sensitivity` | **MUTATING**; preserve `source_id` |
 | List/read a source | `source.list` / `source.get` | list filters, or `source_id` | read-only |

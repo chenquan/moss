@@ -104,12 +104,13 @@ type forgetBlob struct {
 }
 
 type forgetArticle struct {
-	ArticleID   string `json:"article_id"`
-	Path        string `json:"path"`
-	TrashPath   string `json:"trash_path"`
-	CurrentHash string `json:"current_hash"`
-	Version     int    `json:"version"`
-	ForgottenAt string `json:"forgotten_at,omitempty"`
+	ArticleID      string `json:"article_id"`
+	Path           string `json:"path"`
+	TrashPath      string `json:"trash_path"`
+	CurrentHash    string `json:"current_hash"`
+	Version        int    `json:"version"`
+	CurrentContent string `json:"current_content"`
+	ForgottenAt    string `json:"forgotten_at,omitempty"`
 }
 
 type forgetAction struct {
@@ -243,7 +244,20 @@ func Apply(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 		return protocol.Response{}, protocol.NewCodedError("PLAN_EXPIRED", "safety plan has expired", false, map[string]any{"expires_at": plan.ExpiresAt})
 	}
 	markerPath := filepath.Join(store.Paths.Staging, plan.PlanID+".safety.json")
-	markerBytes, _ := json.Marshal(map[string]any{"plan_id": plan.PlanID, "kind": plan.Kind})
+	marker := map[string]any{"plan_id": plan.PlanID, "kind": plan.Kind, "phase": "prepared"}
+	marker["target_json"] = string(plan.Target)
+	if plan.Kind == "rollback" {
+		var target rollbackTarget
+		var previous rollbackPrevious
+		if json.Unmarshal(plan.Target, &target) == nil && json.Unmarshal(plan.Previous, &previous) == nil {
+			marker["article_id"] = target.ArticleID
+			marker["target"] = target.Path
+			marker["before_hash"] = target.CurrentHash
+			marker["after_hash"] = target.TargetHash
+			marker["before_content"] = previous.CurrentContent
+		}
+	}
+	markerBytes, _ := json.Marshal(marker)
 	if err := writePrivateFile(markerPath, markerBytes); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create safety recovery marker", true, nil)
 	}
@@ -264,11 +278,11 @@ func Apply(ctx context.Context, store *storage.Storage, req protocol.Request) (p
 		return replayOrConflict(stored, fingerprint)
 	}
 	if plan.Kind == "forget" {
-		if codedErr := applyForget(ctx, store, tx, plan); codedErr != nil {
+		if codedErr := applyForget(ctx, store, tx, plan, func() { cleanup = false }); codedErr != nil {
 			return protocol.Response{}, codedErr
 		}
 	} else {
-		if codedErr := applyRollback(ctx, store, tx, plan); codedErr != nil {
+		if codedErr := applyRollback(ctx, store, tx, plan, func() { cleanup = false }); codedErr != nil {
 			return protocol.Response{}, codedErr
 		}
 	}
@@ -322,7 +336,20 @@ func Undo(ctx context.Context, store *storage.Storage, req protocol.Request) (pr
 		return protocol.Response{}, protocol.NewCodedError("PLAN_STATE_INVALID", "safety plan is not applied", false, map[string]any{"state": plan.State})
 	}
 	markerPath := filepath.Join(store.Paths.Staging, plan.PlanID+"-undo.safety.json")
-	markerBytes, _ := json.Marshal(map[string]any{"plan_id": plan.PlanID, "kind": plan.Kind, "undo": true})
+	marker := map[string]any{"plan_id": plan.PlanID, "kind": plan.Kind, "undo": true, "phase": "prepared"}
+	marker["target_json"] = string(plan.Target)
+	if plan.Kind == "rollback" {
+		var target rollbackTarget
+		var previous rollbackPrevious
+		if json.Unmarshal(plan.Target, &target) == nil && json.Unmarshal(plan.Previous, &previous) == nil {
+			marker["article_id"] = target.ArticleID
+			marker["target"] = target.Path
+			marker["before_hash"] = target.TargetHash
+			marker["after_hash"] = previous.CurrentHash
+			marker["before_content"] = target.TargetContent
+		}
+	}
+	markerBytes, _ := json.Marshal(marker)
 	if err := writePrivateFile(markerPath, markerBytes); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot create safety undo marker", true, nil)
 	}
@@ -343,11 +370,11 @@ func Undo(ctx context.Context, store *storage.Storage, req protocol.Request) (pr
 		return replayOrConflict(stored, fingerprint)
 	}
 	if plan.Kind == "forget" {
-		if codedErr := undoForget(ctx, store, tx, plan); codedErr != nil {
+		if codedErr := undoForget(ctx, store, tx, plan, func() { cleanup = false }); codedErr != nil {
 			return protocol.Response{}, codedErr
 		}
 	} else {
-		if codedErr := undoRollback(ctx, store, tx, plan); codedErr != nil {
+		if codedErr := undoRollback(ctx, store, tx, plan, func() { cleanup = false }); codedErr != nil {
 			return protocol.Response{}, codedErr
 		}
 	}
@@ -512,6 +539,12 @@ func resolveForget(ctx context.Context, store *storage.Storage, args forgetArgum
 			articleRows.Close()
 			return forgetTarget{}, nil, nil, nil, err
 		}
+		content, err := os.ReadFile(article.Path)
+		if err != nil {
+			articleRows.Close()
+			return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read cited article", true, nil)
+		}
+		article.CurrentContent = string(content)
 		article.TrashPath = filepath.ToSlash(filepath.Join("trash", "forget-article-"+newID("file")+"-"+article.ArticleID+".md"))
 		target.Articles = append(target.Articles, article)
 	}
@@ -636,7 +669,7 @@ func loadPlan(ctx context.Context, db *sql.DB, planID string) (safetyPlan, *prot
 	return plan, nil
 }
 
-func applyForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan safetyPlan) *protocol.CodedError {
+func applyForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan safetyPlan, onFinalization func()) *protocol.CodedError {
 	var target forgetTarget
 	if err := json.Unmarshal(plan.Target, &target); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "forget target is invalid", false, nil)
@@ -702,6 +735,7 @@ func applyForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan s
 		if !blob.Move {
 			continue
 		}
+		onFinalization()
 		if err := moveManaged(store, blob.RawPath, blob.TrashPath, store.Paths.Raw); err != nil {
 			return err
 		}
@@ -710,6 +744,7 @@ func applyForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan s
 		}
 	}
 	for _, article := range target.Articles {
+		onFinalization()
 		if err := moveManaged(store, article.Path, article.TrashPath, filepath.Join(store.Paths.Wiki, "articles")); err != nil {
 			return err
 		}
@@ -754,7 +789,7 @@ func applyForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan s
 	return nil
 }
 
-func undoForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan safetyPlan) *protocol.CodedError {
+func undoForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan safetyPlan, onFinalization func()) *protocol.CodedError {
 	var target forgetTarget
 	if err := json.Unmarshal(plan.Target, &target); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "forget target is invalid", false, nil)
@@ -787,6 +822,7 @@ func undoForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan sa
 		if !blob.Move {
 			continue
 		}
+		onFinalization()
 		if err := moveManaged(store, blob.TrashPath, blob.RawPath, store.Paths.Trash); err != nil {
 			return err
 		}
@@ -795,11 +831,19 @@ func undoForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan sa
 		}
 	}
 	for _, article := range target.Articles {
+		onFinalization()
 		if err := moveManaged(store, article.TrashPath, article.Path, store.Paths.Trash); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE articles SET path = ?, forgotten_at = NULL WHERE article_id = ? AND path = ? AND forgotten_at IS NOT NULL`, article.Path, article.ArticleID, article.TrashPath); err != nil {
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore article path", true, nil)
+		}
+		parsed, parseErr := knowledge.ParseManagedArticle([]byte(article.CurrentContent))
+		if parseErr != nil || parsed.ArticleID != article.ArticleID || parsed.Version != article.Version {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "forgotten article projection is invalid", false, map[string]any{"article_id": article.ArticleID})
+		}
+		if err := storage.ReplaceArticleIndexTx(ctx, tx, article.ArticleID, article.Version, parsed.Title, parsed.Slug, strings.Join(parsed.Tags, " "), parsed.Summary, parsed.Body, strings.Join(parsed.SourceIDs, " ")); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore forgotten article index", true, nil)
 		}
 	}
 	for _, source := range target.Sources {
@@ -840,7 +884,7 @@ func undoForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan sa
 	return nil
 }
 
-func applyRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan safetyPlan) *protocol.CodedError {
+func applyRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan safetyPlan, onFinalization func()) *protocol.CodedError {
 	var target rollbackTarget
 	if err := json.Unmarshal(plan.Target, &target); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "rollback target is invalid", false, nil)
@@ -866,6 +910,7 @@ func applyRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan
 	if err := writePrivateFile(staged, []byte(target.TargetContent)); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot stage rollback article", true, nil)
 	}
+	onFinalization()
 	if err := os.Rename(staged, path); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot apply rollback article", true, nil)
 	}
@@ -881,7 +926,7 @@ func applyRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan
 	return nil
 }
 
-func undoRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan safetyPlan) *protocol.CodedError {
+func undoRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan safetyPlan, onFinalization func()) *protocol.CodedError {
 	var target rollbackTarget
 	var previous rollbackPrevious
 	if err := json.Unmarshal(plan.Target, &target); err != nil {
@@ -909,6 +954,7 @@ func undoRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan 
 	if err := writePrivateFile(staged, []byte(previous.CurrentContent)); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot stage rollback undo", true, nil)
 	}
+	onFinalization()
 	if err := os.Rename(staged, path); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore rollback article", true, nil)
 	}
