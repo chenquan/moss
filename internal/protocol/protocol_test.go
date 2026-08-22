@@ -1,9 +1,9 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"io"
 	"testing"
 )
 
@@ -14,6 +14,16 @@ func TestDecodeRequestRejectsUnknownTopLevelField(t *testing.T) {
 	}
 	if got := err.(*CodedError).Code; got != "REQUEST_INVALID" {
 		t.Fatalf("code = %s", got)
+	}
+}
+
+func TestReadRequestRejectsTrailingDocumentsAndOversizedInput(t *testing.T) {
+	if _, err := ReadRequest(bytes.NewBufferString(`{"protocol_version":"1.0"}{}`)); err == nil || err.(*CodedError).Code != "REQUEST_INVALID" {
+		t.Fatalf("trailing document error = %v", err)
+	}
+	over := bytes.Repeat([]byte("x"), MaxRequestBytes+1)
+	if _, err := ReadRequest(bytes.NewReader(over)); err == nil || err.(*CodedError).Code != "REQUEST_TOO_LARGE" {
+		t.Fatalf("oversized stream error = %v", err)
 	}
 }
 
@@ -33,43 +43,33 @@ func TestFingerprintStableForEquivalentMaps(t *testing.T) {
 	}
 }
 
-func TestWriteResponseAtomicallyCreatesPrivateFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "response.json")
-	if err := WriteResponse(path, Response{ProtocolVersion: SupportedVersion, RequestID: "r", OK: true}); err != nil {
+func TestWriteResponseStreamWritesOneJSONDocument(t *testing.T) {
+	var output bytes.Buffer
+	response := Response{ProtocolVersion: SupportedVersion, RequestID: "stream-1", OK: true}
+	if err := WriteResponseStream(&output, response); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
+	if output.Len() == 0 || output.Bytes()[output.Len()-1] != '\n' {
+		t.Fatalf("stream output must end with newline: %q", output.String())
 	}
-	if got := info.Mode().Perm(); got != 0600 {
-		t.Fatalf("permissions = %o", got)
+	var decoded Response
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("stream output is not JSON: %v", err)
 	}
-	if entries, err := os.ReadDir(dir); err != nil {
-		t.Fatal(err)
-	} else if len(entries) != 1 {
-		t.Fatalf("temporary response files remain: %d", len(entries))
+	if decoded.RequestID != response.RequestID || !decoded.OK {
+		t.Fatalf("decoded response = %+v", decoded)
 	}
 }
 
-func TestValidateResponseRejectsSymlink(t *testing.T) {
-	dir := t.TempDir()
-	request := filepath.Join(dir, "request.json")
-	response := filepath.Join(dir, "response.json")
-	if err := os.WriteFile(request, []byte(`{}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "target.json"), []byte("old"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("target.json", response); err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateResponsePath(response, request, filepath.Join(dir, "data")); err == nil || err.(*CodedError).Code != "PATH_INVALID" {
-		t.Fatalf("expected PATH_INVALID, got %v", err)
+func TestWriteResponseStreamPropagatesShortWriter(t *testing.T) {
+	if err := WriteResponseStream(shortWriter{}, Response{ProtocolVersion: SupportedVersion, RequestID: "stream-short", OK: true}); err != io.ErrShortWrite {
+		t.Fatalf("short writer error = %v", err)
 	}
 }
+
+type shortWriter struct{}
+
+func (shortWriter) Write([]byte) (int, error) { return 0, nil }
 
 func TestBackupOperationsAreMachineCapabilities(t *testing.T) {
 	if !IsMutating("system.export") || !IsMutating("system.restore") {

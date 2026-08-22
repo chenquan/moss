@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -95,7 +93,7 @@ func NewSuccessResponse(req Request, data any) Response {
 
 func DecodeRequest(data []byte) (Request, error) {
 	if len(data) > MaxRequestBytes {
-		return Request{}, NewCodedError("REQUEST_TOO_LARGE", "request file exceeds the maximum size", false, nil)
+		return Request{}, NewCodedError("REQUEST_TOO_LARGE", "request exceeds the maximum size", false, nil)
 	}
 	var req Request
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -108,6 +106,21 @@ func DecodeRequest(data []byte) (Request, error) {
 		return Request{}, NewCodedError("REQUEST_INVALID", "request must contain exactly one JSON document", false, nil)
 	}
 	return req, nil
+}
+
+// ReadRequest reads one bounded JSON request document from a stream. The
+// stream transport is deliberately strict: a caller cannot smuggle a second
+// document after the first one, and oversized input is rejected before any
+// operation validation or dispatch occurs.
+func ReadRequest(r io.Reader) (Request, error) {
+	if r == nil {
+		return Request{}, NewCodedError("REQUEST_INVALID", "request stream is unavailable", false, nil)
+	}
+	data, err := io.ReadAll(io.LimitReader(r, MaxRequestBytes+1))
+	if err != nil {
+		return Request{}, NewCodedError("REQUEST_INVALID", "request stream could not be read", true, err.Error())
+	}
+	return DecodeRequest(data)
 }
 
 func (r Request) ValidateBasic() *CodedError {
@@ -210,89 +223,39 @@ func SupportedCapabilities() []Capability {
 	}
 }
 
-func WriteResponse(path string, response Response) error {
+func MarshalResponse(response Response) ([]byte, error) {
 	b, err := json.Marshal(response)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(b) > MaxResponseBytes {
-		return NewCodedError("RESPONSE_TOO_LARGE", "response exceeds the maximum size", false, nil)
+		return nil, NewCodedError("RESPONSE_TOO_LARGE", "response exceeds the maximum size", false, nil)
 	}
-	parent := filepath.Dir(path)
-	tmp, err := os.CreateTemp(parent, ".moss-response-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(b); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return nil
+	return b, nil
 }
 
-func ValidateRequestPath(path string) error {
-	if path == "" {
-		return NewCodedError("PATH_INVALID", "request path is required", false, nil)
-	}
-	info, err := os.Lstat(path)
+// WriteResponseStream writes exactly one response document to a business
+// output stream. The newline makes the response frame unambiguous for shell
+// callers while keeping stdout free of any diagnostics or formatting.
+func WriteResponseStream(w io.Writer, response Response) error {
+	b, err := MarshalResponse(response)
 	if err != nil {
-		return NewCodedError("PATH_INVALID", "request path cannot be inspected", false, err.Error())
+		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return NewCodedError("PATH_INVALID", "request path must be a regular non-symlink file", false, nil)
-	}
-	if info.Size() > MaxRequestBytes {
-		return NewCodedError("REQUEST_TOO_LARGE", "request file exceeds the maximum size", false, nil)
-	}
-	return nil
+	b = append(b, '\n')
+	return writeAll(w, b)
 }
 
-func ValidateResponsePath(path, requestPath, dataRoot string) error {
-	if path == "" {
-		return NewCodedError("PATH_INVALID", "response path is required", false, nil)
-	}
-	parent := filepath.Dir(path)
-	info, err := os.Stat(parent)
-	if err != nil || !info.IsDir() {
-		return NewCodedError("PATH_INVALID", "response parent directory is unavailable", false, nil)
-	}
-	resolvedParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return NewCodedError("PATH_INVALID", "response parent directory cannot be resolved", false, nil)
-	}
-	requestRoot, err := filepath.EvalSymlinks(filepath.Dir(requestPath))
-	if err != nil {
-		return NewCodedError("PATH_INVALID", "request parent directory cannot be resolved", false, nil)
-	}
-	allowed := within(resolvedParent, requestRoot) || within(resolvedParent, dataRoot)
-	if !allowed {
-		return NewCodedError("PATH_INVALID", "response path is outside the request or Moss managed directory", false, nil)
-	}
-	if existing, err := os.Lstat(path); err == nil && existing.Mode()&os.ModeSymlink != 0 {
-		return NewCodedError("PATH_INVALID", "response path must not be a symlink", false, nil)
+func writeAll(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := w.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
 	}
 	return nil
-}
-
-func within(path, root string) bool {
-	path, _ = filepath.Abs(path)
-	root, _ = filepath.Abs(root)
-	rel, err := filepath.Rel(root, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != string(filepath.Separator)
 }

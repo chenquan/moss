@@ -107,11 +107,12 @@ type materializedData struct {
 	Sensitivity string     `json:"sensitivity"`
 	Version     int        `json:"version"`
 	Hash        string     `json:"hash"`
+	Bytes       int64      `json:"bytes"`
 	Summary     string     `json:"summary"`
 	Tags        []string   `json:"tags"`
 	SourceIDs   []string   `json:"source_ids"`
 	Citations   []citation `json:"citations"`
-	Content     string     `json:"content"`
+	Content     string     `json:"content,omitempty"`
 	UpdatedAt   string     `json:"updated_at"`
 }
 
@@ -119,6 +120,7 @@ type historyVersion struct {
 	Version   int        `json:"version"`
 	Hash      string     `json:"hash"`
 	Path      string     `json:"path"`
+	Bytes     int64      `json:"bytes"`
 	JobID     string     `json:"job_id,omitempty"`
 	CreatedAt string     `json:"created_at"`
 	Citations []citation `json:"citations"`
@@ -288,7 +290,20 @@ func Materialize(ctx context.Context, store *storage.Storage, req protocol.Reque
 	if codedErr != nil {
 		return nil, codedErr
 	}
-	return materializedData{ArticleID: row.ArticleID, Slug: row.Slug, Title: row.Title, Path: path, Sensitivity: row.Sensitivity, Version: row.Version, Hash: row.Hash, Summary: parsed.Summary, Tags: parsed.Tags, SourceIDs: parsed.SourceIDs, Citations: citations, Content: string(contents), UpdatedAt: row.UpdatedAt}, nil
+	inlineContent, codedErr := protocol.OptionBool(req, "inline_content")
+	if codedErr != nil {
+		return nil, codedErr
+	}
+	data := materializedData{ArticleID: row.ArticleID, Slug: row.Slug, Title: row.Title, Path: path, Sensitivity: row.Sensitivity, Version: row.Version, Hash: row.Hash, Bytes: int64(len(contents)), Summary: parsed.Summary, Tags: parsed.Tags, SourceIDs: parsed.SourceIDs, Citations: citations, UpdatedAt: row.UpdatedAt}
+	if inlineContent || !hasOption(req, "inline_content") {
+		data.Content = string(contents)
+	}
+	return data, nil
+}
+
+func hasOption(req protocol.Request, key string) bool {
+	_, ok := req.Options[key]
+	return ok
 }
 
 // History reads version records from SQLite, never an arbitrary filesystem path.
@@ -332,7 +347,7 @@ func History(ctx context.Context, store *storage.Storage, req protocol.Request) 
 		if codedErr != nil {
 			return nil, codedErr
 		}
-		item := historyVersion{Version: version, Hash: contentHash, Path: path, JobID: jobID, CreatedAt: createdAt, Citations: citations}
+		item := historyVersion{Version: version, Hash: contentHash, Path: path, Bytes: int64(len(content)), JobID: jobID, CreatedAt: createdAt, Citations: citations}
 		if args.IncludeContent {
 			if len(content) > maxArticleBytes {
 				return nil, protocol.NewCodedError("ARTICLE_TOO_LARGE", "historical article exceeds the retrieval size limit", false, nil)

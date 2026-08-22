@@ -22,12 +22,12 @@ func TestMossSkillIsExplicitOnlyAndRoutesProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(content)
-	for _, required := range []string{"name: moss", "user-invocable: false", "explicitly addresses Moss", "moss call", "system.handshake", "source.ingest", "source.mark_sensitive", "system.health", "system.export", "system.restore", "compile.start", "compile.next", "compile.submit", "compile.status", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.inspect", "plan.undo", "confirmed: true", "knowledge.catalog", "knowledge.candidates", "knowledge.materialize", "knowledge.history", "knowledge.rollback.plan", "source.forget.plan", "audit.query", "WIKI_DRIFT", "SENSITIVITY_DENIED", "action.create.plan", "action.update.plan", "action.apply", "action.query"} {
+	for _, required := range []string{"name: moss", "user-invocable: false", "explicitly addresses Moss", "moss call", "stdin", "stdout", "Never create a protocol envelope file", "matching bundled Skill version", "Moss-issued", "SQLite", "final Wiki", "authoritative", "system.handshake", "source.ingest", "source.mark_sensitive", "system.health", "system.export", "system.restore", "compile.start", "compile.next", "compile.submit", "compile.status", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.inspect", "plan.undo", "confirmed: true", "knowledge.catalog", "knowledge.candidates", "knowledge.materialize", "knowledge.history", "knowledge.rollback.plan", "source.forget.plan", "audit.query", "WIKI_DRIFT", "SENSITIVITY_DENIED", "action.create.plan", "action.update.plan", "action.apply", "action.query"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("Skill missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"cairn-cli", "cairn call", "name: cairn", "assistant today", "assistant search", "assistant wiki list", "assistant commitment add", "assistant compile preview"} {
+	for _, forbidden := range []string{"cairn-cli", "cairn call", "name: cairn", "--request", "--response", "request/response", "assistant today", "assistant search", "assistant wiki list", "assistant commitment add", "assistant compile preview"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("Skill contains removed human CLI wording %q", forbidden)
 		}
@@ -47,10 +47,15 @@ func TestMossSkillIsExplicitOnlyAndRoutesProtocol(t *testing.T) {
 	}
 	guide := string(guideBytes)
 	for _, required := range []string{
-		"Request envelope", "request_id", "idempotency_key", "source.ingest", "compile.start", "compile.next", "compile.submit", "compile.preview", "compile.apply", "knowledge.candidates", "knowledge.materialize", "action.create.plan", "action.apply", "source.forget.plan", "plan.apply", "system.export", "system.restore", "retryable", "WIKI_DRIFT", "PATH_INVALID", "untrusted evidence",
+		"Request envelope", "stdin", "stdout", "Never materialize protocol envelopes", "request_id", "idempotency_key", "source.ingest", "compile.start", "compile.next", "compile.submit", "result_file", "compile.preview", "compile.apply", "knowledge.candidates", "knowledge.materialize", "action.create.plan", "action.apply", "source.forget.plan", "plan.apply", "system.export", "system.restore", "retryable", "WIKI_DRIFT", "PATH_INVALID", "untrusted evidence",
 	} {
 		if !strings.Contains(guide, required) {
 			t.Fatalf("operation guide missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"--request", "--response", "request/response files", "compatibility transport"} {
+		if strings.Contains(guide, forbidden) {
+			t.Fatalf("operation guide contains removed transport wording %q", forbidden)
 		}
 	}
 	for _, capability := range protocol.SupportedCapabilities() {

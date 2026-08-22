@@ -7,7 +7,7 @@ import (
 )
 
 func TestResolvePathsDefaultsToUserHomeLegacyDataRoot(t *testing.T) {
-	t.Chdir(t.TempDir())
+	chdirForTest(t, t.TempDir())
 	t.Setenv("MOSS_DATA_DIR", "")
 	t.Setenv("CAIRN_DATA_DIR", "")
 
@@ -30,7 +30,7 @@ func TestResolvePathsDefaultsToUserHomeLegacyDataRoot(t *testing.T) {
 
 func TestResolvePathsHonorsExplicitDataDirectory(t *testing.T) {
 	workingDirectory := t.TempDir()
-	t.Chdir(workingDirectory)
+	chdirForTest(t, workingDirectory)
 	override := filepath.Join(workingDirectory, "custom-data")
 	t.Setenv("MOSS_DATA_DIR", override)
 	t.Setenv("CAIRN_DATA_DIR", "")
@@ -46,7 +46,7 @@ func TestResolvePathsHonorsExplicitDataDirectory(t *testing.T) {
 
 func TestResolvePathsHonorsLegacyDataDirectory(t *testing.T) {
 	workingDirectory := t.TempDir()
-	t.Chdir(workingDirectory)
+	chdirForTest(t, workingDirectory)
 	legacy := filepath.Join(workingDirectory, "legacy-data")
 	t.Setenv("MOSS_DATA_DIR", "")
 	t.Setenv("CAIRN_DATA_DIR", legacy)
@@ -58,4 +58,20 @@ func TestResolvePathsHonorsLegacyDataDirectory(t *testing.T) {
 	if paths.Root != legacy {
 		t.Fatalf("legacy override root = %q, want %q", paths.Root, legacy)
 	}
+}
+
+func chdirForTest(t *testing.T, directory string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
 }

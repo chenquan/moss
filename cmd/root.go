@@ -34,7 +34,7 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "moss exposes the machine call protocol and the explicit skill install setup command")
 	})
-	root.AddCommand(newCallCommand(stdout, stderr))
+	root.AddCommand(newCallCommand())
 	root.AddCommand(newSkillCommand())
 	return root
 }

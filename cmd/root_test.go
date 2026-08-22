@@ -58,11 +58,31 @@ func TestSkillInstallCommandRejectsCombinedTargetAlias(t *testing.T) {
 	}
 }
 
-func TestCallRequiresPathsAndRejectsPositionals(t *testing.T) {
+func TestCallTransportValidationAndDefaultStdio(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	root := NewRootCommand(&stdout, &stderr)
+	root.SetIn(strings.NewReader("{}"))
+	root.SetArgs([]string{"call"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var response protocol.Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("stdio response = %q: %v", stdout.String(), err)
+	}
+	if response.OK || response.Error == nil || response.Error.Code != "REQUEST_INVALID" {
+		t.Fatalf("default stdio response = %+v", response)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stdio diagnostics leaked: %q", stderr.String())
+	}
+
 	for _, args := range [][]string{
-		{"call"},
 		{"call", "--request", "request.json"},
 		{"call", "--response", "response.json"},
+		{"call", "--stdin"},
+		{"call", "--stdout"},
+		{"call", "--stdin", "--stdout", "--request", "request.json", "--response", "response.json"},
 		{"call", "--request", "request.json", "--response", "response.json", "extra"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -89,14 +109,12 @@ func TestMachineHelpDoesNotRenderUsage(t *testing.T) {
 	}
 }
 
-func TestCallDispatchesToApplication(t *testing.T) {
+func TestCallDefaultsToStdio(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("MOSS_DATA_DIR", filepath.Join(dir, "data"))
-	requestPath := filepath.Join(dir, "request.json")
-	responsePath := filepath.Join(dir, "response.json")
 	request := protocol.Request{
 		ProtocolVersion: protocol.SupportedVersion,
-		RequestID:       "req-cobra-test",
+		RequestID:       "req-cobra-stdio",
 		Operation:       "system.capabilities",
 		Actor:           protocol.Actor{Type: "claude-skill", SkillVersion: "0.1.0"},
 		Arguments:       map[string]json.RawMessage{},
@@ -105,28 +123,24 @@ func TestCallDispatchesToApplication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(requestPath, b, 0600); err != nil {
-		t.Fatal(err)
-	}
 
-	var stdout, stderr bytes.Buffer
-	root := NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"call", "--request", requestPath, "--response", responsePath})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("machine output leaked: stdout=%q stderr=%q", stdout.String(), stderr.String())
-	}
-	result, err := os.ReadFile(responsePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var response protocol.Response
-	if err := json.Unmarshal(result, &response); err != nil {
-		t.Fatal(err)
-	}
-	if !response.OK || response.RequestID != request.RequestID {
-		t.Fatalf("response = %+v", response)
+	for _, args := range [][]string{{"call"}} {
+		var stdout, stderr bytes.Buffer
+		root := NewRootCommand(&stdout, &stderr)
+		root.SetIn(bytes.NewReader(b))
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("args %v: %v", args, err)
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("args %v stderr=%q", args, stderr.String())
+		}
+		var response protocol.Response
+		if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+			t.Fatalf("args %v stdout=%q: %v", args, stdout.String(), err)
+		}
+		if !response.OK || response.RequestID != request.RequestID {
+			t.Fatalf("args %v response=%+v", args, response)
+		}
 	}
 }

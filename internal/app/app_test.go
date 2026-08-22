@@ -43,6 +43,53 @@ func TestSystemHandshakeAndHealth(t *testing.T) {
 	}
 }
 
+func TestRunCallStdioWritesStructuredResponseWithoutEnvelopeFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MOSS_DATA_DIR", filepath.Join(dir, "data"))
+	request := protocol.Request{
+		ProtocolVersion: protocol.SupportedVersion,
+		RequestID:       "req-stdio-capabilities",
+		Operation:       "system.capabilities",
+		Actor:           protocol.Actor{Type: "claude-skill", SkillVersion: "0.1.0"},
+		Arguments:       map[string]json.RawMessage{},
+	}
+	requestBytes, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := RunCallStdio(bytes.NewReader(requestBytes), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+	var response protocol.Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("stdout=%q: %v", stdout.String(), err)
+	}
+	if !response.OK || response.RequestID != request.RequestID {
+		t.Fatalf("response=%+v", response)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "data")); !os.IsNotExist(err) {
+		t.Fatalf("stdio capabilities unexpectedly created data directory: %v", err)
+	}
+}
+
+func TestRunCallStdioReturnsStructuredDecodeError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := RunCallStdio(strings.NewReader(`{"protocol_version":"1.0"}{}`), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	var response protocol.Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("stdout=%q: %v", stdout.String(), err)
+	}
+	if response.OK || response.Error == nil || response.Error.Code != "REQUEST_INVALID" {
+		t.Fatalf("decode response=%+v", response)
+	}
+}
+
 func TestSystemExportRestoreAndIdempotency(t *testing.T) {
 	dir := t.TempDir()
 	actor := protocol.Actor{Type: "claude-skill", SkillVersion: "0.1.0"}
@@ -355,27 +402,6 @@ func TestHealthReportsRecoveryAndCorruptStorage(t *testing.T) {
 	}
 }
 
-func TestTransportFailureDoesNotWriteBusinessResponse(t *testing.T) {
-	dir := t.TempDir()
-	requestPath := filepath.Join(dir, "request.json")
-	request := protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-transport", Operation: "system.capabilities", Actor: protocol.Actor{Type: "claude-skill", SkillVersion: "0.1.0"}, Arguments: map[string]json.RawMessage{}}
-	b, err := json.Marshal(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(requestPath, b, 0600); err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	code := RunCall(requestPath, filepath.Join(dir, "missing", "response.json"), &stdout, &stderr)
-	if code != ExitUsage {
-		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout is not empty: %s", stdout.String())
-	}
-}
-
 func TestCompilePreviewApplyAndUndo(t *testing.T) {
 	dir := t.TempDir()
 	input := filepath.Join(dir, "design.md")
@@ -661,8 +687,16 @@ func TestKnowledgeRetrievalCatalogCandidatesMaterializeAndHistory(t *testing.T) 
 		t.Fatalf("materialize failed: %+v", materialize.Error)
 	}
 	materializedData := materialize.Data.(map[string]any)
-	if !strings.Contains(materializedData["content"].(string), "versioned and cited") || len(materializedData["citations"].([]any)) != 1 {
+	if !strings.Contains(materializedData["content"].(string), "versioned and cited") || materializedData["bytes"].(float64) <= 0 || len(materializedData["citations"].([]any)) != 1 {
 		t.Fatalf("materialized data = %+v", materializedData)
+	}
+	materializePathOnly := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-retrieve-materialize-path-only", Operation: "knowledge.materialize", Actor: actor, Arguments: map[string]json.RawMessage{"article_id": json.RawMessage(mustJSON(articleID))}, Options: map[string]json.RawMessage{"inline_content": json.RawMessage(`false`)}})
+	if !materializePathOnly.OK {
+		t.Fatalf("path-only materialize failed: %+v", materializePathOnly.Error)
+	}
+	pathOnlyData := materializePathOnly.Data.(map[string]any)
+	if _, present := pathOnlyData["content"]; present || pathOnlyData["path"] != articlePath || pathOnlyData["bytes"].(float64) <= 0 {
+		t.Fatalf("path-only materialized data = %+v", pathOnlyData)
 	}
 
 	history := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-retrieve-history", Operation: "knowledge.history", Actor: actor, Arguments: map[string]json.RawMessage{"article_id": json.RawMessage(mustJSON(articleID)), "include_content": json.RawMessage(`true`)}})
@@ -1133,31 +1167,21 @@ func compilePreviewForTest(t *testing.T, dir string, actor protocol.Actor, suffi
 
 func runRequest(t *testing.T, dir string, request protocol.Request) protocol.Response {
 	t.Helper()
-	dataDir := filepath.Join(dir, "data")
-	t.Setenv("CAIRN_DATA_DIR", dataDir)
-	requestPath := filepath.Join(dir, request.RequestID+".request.json")
-	responsePath := filepath.Join(dir, request.RequestID+".response.json")
+	t.Setenv("MOSS_DATA_DIR", filepath.Join(dir, "data"))
 	b, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(requestPath, b, 0600); err != nil {
-		t.Fatal(err)
-	}
 	var stdout, stderr bytes.Buffer
-	if code := RunCall(requestPath, responsePath, &stdout, &stderr); code != ExitOK {
-		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	if code := RunCallStdio(bytes.NewReader(b), &stdout, &stderr); code != ExitOK {
+		t.Fatalf("stdio exit=%d stderr=%s", code, stderr.String())
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout is not empty: %s", stdout.String())
-	}
-	result, err := os.ReadFile(responsePath)
-	if err != nil {
-		t.Fatal(err)
+	if stderr.Len() != 0 {
+		t.Fatalf("stdio stderr=%s", stderr.String())
 	}
 	var response protocol.Response
-	if err := json.Unmarshal(result, &response); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("stdio response=%q: %v", stdout.String(), err)
 	}
 	return response
 }

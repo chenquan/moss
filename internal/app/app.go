@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"moss/internal/action"
@@ -25,53 +24,36 @@ const (
 	ExitUsage     = 2
 )
 
-func RunCall(requestPath, responsePath string, stdout, stderr io.Writer) int {
-	if err := protocol.ValidateRequestPath(requestPath); err != nil {
-		_, _ = fmt.Fprintln(stderr, err.Error())
-		return ExitUsage
-	}
-	paths, err := storage.ResolvePaths()
-	if err != nil {
+// RunCallStdio executes one machine request using stdin/stdout. Business
+// errors are represented by a structured response and therefore still return
+// ExitOK; a non-zero code is reserved for transport failures that prevent a
+// response from being delivered.
+func RunCallStdio(stdin io.Reader, stdout, stderr io.Writer) int {
+	req, decodeErr := protocol.ReadRequest(stdin)
+	response := executeRequest(context.Background(), req, decodeErr)
+	if err := protocol.WriteResponseStream(stdout, response); err != nil {
 		_, _ = fmt.Fprintln(stderr, err.Error())
 		return ExitTransport
 	}
-	if err := protocol.ValidateResponsePath(responsePath, requestPath, paths.Root); err != nil {
-		_, _ = fmt.Fprintln(stderr, err.Error())
-		return ExitUsage
-	}
+	return ExitOK
+}
 
-	requestBytes, err := readBounded(requestPath, protocol.MaxRequestBytes)
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, err.Error())
-		return ExitUsage
-	}
-	req, decodeErr := protocol.DecodeRequest(requestBytes)
+func executeRequest(ctx context.Context, req protocol.Request, decodeErr error) protocol.Response {
 	if decodeErr != nil {
-		coded := asCodedError(decodeErr)
-		response := protocol.NewErrorResponse(protocol.Request{}, coded)
-		if err := protocol.WriteResponse(responsePath, response); err != nil {
-			_, _ = fmt.Fprintln(stderr, err.Error())
-			return ExitTransport
-		}
-		return ExitOK
+		return protocol.NewErrorResponse(protocol.Request{}, asCodedError(decodeErr))
 	}
 	if codedErr := req.ValidateBasic(); codedErr != nil {
-		return writeBusinessResponse(responsePath, req, codedErr, stderr)
+		return protocol.NewErrorResponse(req, codedErr)
 	}
 	if req.ProtocolVersion != protocol.SupportedVersion {
-		return writeBusinessResponse(responsePath, req, protocol.NewCodedError("PROTOCOL_VERSION_UNSUPPORTED", "request protocol version is not supported", false, map[string]any{"supported": []string{protocol.SupportedVersion}}), stderr)
+		return protocol.NewErrorResponse(req, protocol.NewCodedError("PROTOCOL_VERSION_UNSUPPORTED", "request protocol version is not supported", false, map[string]any{"supported": []string{protocol.SupportedVersion}}))
 	}
 
-	response, codedErr := dispatch(context.Background(), req)
+	response, codedErr := dispatch(ctx, req)
 	if codedErr != nil {
-		response = protocol.NewErrorResponse(req, codedErr)
+		return protocol.NewErrorResponse(req, codedErr)
 	}
-	if err := protocol.WriteResponse(responsePath, response); err != nil {
-		_, _ = fmt.Fprintln(stderr, err.Error())
-		return ExitTransport
-	}
-	_ = stdout
-	return ExitOK
+	return response
 }
 
 func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *protocol.CodedError) {
@@ -291,30 +273,6 @@ func openMutableStorage(ctx context.Context) (*storage.Storage, *protocol.CodedE
 		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "mutating operations are unavailable until Moss storage is healthy", true, health)
 	}
 	return store, nil
-}
-
-func readBounded(path string, limit int64) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("read request: %w", err)
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("read request: %w", err)
-	}
-	if int64(len(data)) > limit {
-		return nil, errors.New("request file exceeds the maximum size")
-	}
-	return data, nil
-}
-
-func writeBusinessResponse(path string, req protocol.Request, codedErr *protocol.CodedError, stderr io.Writer) int {
-	if err := protocol.WriteResponse(path, protocol.NewErrorResponse(req, codedErr)); err != nil {
-		_, _ = fmt.Fprintln(stderr, err.Error())
-		return ExitTransport
-	}
-	return ExitOK
 }
 
 func asCodedError(err error) *protocol.CodedError {
