@@ -1,6 +1,7 @@
 package app
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -316,6 +317,10 @@ func TestSourceMarkSensitivePropagatesAndRequiresLoweringConfirmation(t *testing
 	if response := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-mark-sensitive-article-denied", Operation: "knowledge.materialize", Actor: actor, Arguments: map[string]json.RawMessage{"article_id": json.RawMessage(mustJSON(articleID))}}); response.OK || response.Error == nil || response.Error.Code != "SENSITIVITY_DENIED" {
 		t.Fatalf("propagated article access = %+v", response)
 	}
+	materializeSensitive := protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-mark-sensitive-article-allowed", Operation: "knowledge.materialize", Actor: actor, Arguments: map[string]json.RawMessage{"article_id": json.RawMessage(mustJSON(articleID))}, Options: map[string]json.RawMessage{"allow_sensitive": json.RawMessage(`true`)}}
+	if response := runRequest(t, dir, materializeSensitive); !response.OK || response.Data.(map[string]any)["version"] != float64(2) {
+		t.Fatalf("propagated article materialization = %+v", response)
+	}
 	if response := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-mark-sensitive-action-hidden", Operation: "action.query", Actor: actor, Arguments: map[string]json.RawMessage{"include_completed": json.RawMessage(`true`)}}); !response.OK || len(response.Data.(map[string]any)["actions"].([]any)) != 0 {
 		t.Fatalf("propagated action query = %+v", response)
 	}
@@ -336,6 +341,11 @@ func TestSourceMarkSensitivePropagatesAndRequiresLoweringConfirmation(t *testing
 	if response := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-mark-sensitive-derived-stays-restricted", Operation: "knowledge.materialize", Actor: actor, Arguments: map[string]json.RawMessage{"article_id": json.RawMessage(mustJSON(articleID))}}); response.OK || response.Error == nil || response.Error.Code != "SENSITIVITY_DENIED" {
 		t.Fatalf("derived article was relaxed unexpectedly = %+v", response)
 	}
+	materializeSensitive.RequestID = "req-mark-sensitive-derived-stays-consistent"
+	materializeSensitive.IdempotencyKey = "idem-mark-sensitive-derived-stays-consistent"
+	if response := runRequest(t, dir, materializeSensitive); !response.OK || response.Data.(map[string]any)["sensitivity"] != "restricted" {
+		t.Fatalf("derived article drifted after source lowering = %+v", response)
+	}
 	invalid := mark
 	invalid.RequestID = "req-mark-sensitive-invalid"
 	invalid.IdempotencyKey = "idem-mark-sensitive-invalid"
@@ -343,6 +353,52 @@ func TestSourceMarkSensitivePropagatesAndRequiresLoweringConfirmation(t *testing
 	if response := runRequest(t, dir, invalid); response.OK || response.Error == nil || response.Error.Code != "SENSITIVITY_INVALID" {
 		t.Fatalf("invalid sensitivity = %+v", response)
 	}
+}
+
+func TestSystemExportRestoreIncludesExtractionArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	actor := protocol.Actor{Type: "claude-skill", SkillVersion: "0.1.0"}
+	sourceID, _, planID, _, _ := compilePreviewForTest(t, dir, actor, "backup-extraction", "Extraction-backed article.", "", "backup-extraction")
+	apply := protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-backup-extraction-apply", Operation: "plan.apply", Actor: actor, Arguments: map[string]json.RawMessage{"plan_id": json.RawMessage(mustJSON(planID)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-backup-extraction-apply"}
+	if response := runRequest(t, dir, apply); !response.OK {
+		t.Fatalf("extraction compile apply failed: %+v", response.Error)
+	}
+	exported := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-backup-extraction-export", Operation: "system.export", Actor: actor, Arguments: map[string]json.RawMessage{}, IdempotencyKey: "idem-backup-extraction-export"})
+	if !exported.OK {
+		t.Fatalf("extraction export failed: %+v", exported.Error)
+	}
+	backupPath := exported.Data.(map[string]any)["backup_path"].(string)
+	archive, err := zip.OpenReader(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	foundExtraction := false
+	for _, file := range archive.File {
+		if strings.HasPrefix(file.Name, "extractions/") {
+			foundExtraction = true
+			break
+		}
+	}
+	if !foundExtraction {
+		t.Fatalf("backup archive has no extraction artifact")
+	}
+	postInput := filepath.Join(dir, "post-backup.md")
+	if err := os.WriteFile(postInput, []byte("post backup"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	post := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-backup-extraction-post", Operation: "source.ingest", Actor: actor, Arguments: map[string]json.RawMessage{"input_file": json.RawMessage(mustJSON(postInput)), "source_type": json.RawMessage(`"markdown"`), "sensitivity": json.RawMessage(`"normal"`)}, IdempotencyKey: "idem-backup-extraction-post"})
+	if !post.OK {
+		t.Fatalf("post-backup ingest failed: %+v", post.Error)
+	}
+	restore := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-backup-extraction-restore", Operation: "system.restore", Actor: actor, Arguments: map[string]json.RawMessage{"backup_path": json.RawMessage(mustJSON(backupPath)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-backup-extraction-restore"})
+	if !restore.OK {
+		t.Fatalf("extraction restore failed: %+v", restore.Error)
+	}
+	if response := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-backup-extraction-health", Operation: "system.health", Actor: actor, Arguments: map[string]json.RawMessage{}}); !response.OK || response.Data.(map[string]any)["overall"] != "healthy" {
+		t.Fatalf("post-extraction-restore health = %+v", response)
+	}
+	_ = sourceID
 }
 
 func TestProtocolAndSourceValidationErrors(t *testing.T) {
@@ -1189,6 +1245,43 @@ func TestSafetyRollbackPlanDetectsDriftApplyAndUndo(t *testing.T) {
 	}
 	if got := mustReadFile(t, articlePath); !bytes.Equal(got, v2Content) {
 		t.Fatalf("rollback undo content = %q", got)
+	}
+}
+
+func TestSafetyRollbackRestoresSensitivityMetadata(t *testing.T) {
+	dir := t.TempDir()
+	actor := protocol.Actor{Type: "claude-skill", SkillVersion: "0.1.0"}
+	sourceID, _, compilePlan, _, articleID := compilePreviewForTest(t, dir, actor, "rollback-sensitivity", "Sensitive rollback body.", "", "rollback-sensitivity")
+	applyCompile := protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-rollback-sensitivity-v1", Operation: "plan.apply", Actor: actor, Arguments: map[string]json.RawMessage{"plan_id": json.RawMessage(mustJSON(compilePlan)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-rollback-sensitivity-v1"}
+	if response := runRequest(t, dir, applyCompile); !response.OK {
+		t.Fatalf("sensitivity rollback v1 apply failed: %+v", response.Error)
+	}
+	mark := protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-rollback-sensitivity-mark", Operation: "source.mark_sensitive", Actor: actor, Arguments: map[string]json.RawMessage{"source_id": json.RawMessage(mustJSON(sourceID)), "sensitivity": json.RawMessage(`"restricted"`)}, IdempotencyKey: "idem-rollback-sensitivity-mark"}
+	if response := runRequest(t, dir, mark); !response.OK {
+		t.Fatalf("sensitivity rollback mark failed: %+v", response.Error)
+	}
+	rollback := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-rollback-sensitivity-plan", Operation: "knowledge.rollback.plan", Actor: actor, Arguments: map[string]json.RawMessage{"article_id": json.RawMessage(mustJSON(articleID)), "target_version": json.RawMessage(`1`)}, IdempotencyKey: "idem-rollback-sensitivity-plan"})
+	if !rollback.OK {
+		t.Fatalf("sensitivity rollback plan failed: %+v", rollback.Error)
+	}
+	planID := rollback.Data.(map[string]any)["plan_id"].(string)
+	applyRollback := protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-rollback-sensitivity-apply", Operation: "plan.apply", Actor: actor, Arguments: map[string]json.RawMessage{"plan_id": json.RawMessage(mustJSON(planID)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-rollback-sensitivity-apply"}
+	if response := runRequest(t, dir, applyRollback); !response.OK {
+		t.Fatalf("sensitivity rollback apply failed: %+v", response.Error)
+	}
+	materialize := protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-rollback-sensitivity-normal", Operation: "knowledge.materialize", Actor: actor, Arguments: map[string]json.RawMessage{"article_id": json.RawMessage(mustJSON(articleID))}}
+	if response := runRequest(t, dir, materialize); !response.OK || response.Data.(map[string]any)["sensitivity"] != "normal" || response.Data.(map[string]any)["version"] != float64(1) {
+		t.Fatalf("sensitivity rollback metadata = %+v", response)
+	}
+	undo := protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-rollback-sensitivity-undo", Operation: "plan.undo", Actor: actor, Arguments: map[string]json.RawMessage{"plan_id": json.RawMessage(mustJSON(planID)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-rollback-sensitivity-undo"}
+	if response := runRequest(t, dir, undo); !response.OK {
+		t.Fatalf("sensitivity rollback undo failed: %+v", response.Error)
+	}
+	materialize.Options = map[string]json.RawMessage{"allow_sensitive": json.RawMessage(`true`)}
+	materialize.RequestID = "req-rollback-sensitivity-restored"
+	materialize.IdempotencyKey = "idem-rollback-sensitivity-restored"
+	if response := runRequest(t, dir, materialize); !response.OK || response.Data.(map[string]any)["sensitivity"] != "restricted" || response.Data.(map[string]any)["version"] != float64(2) {
+		t.Fatalf("sensitivity rollback undo metadata = %+v", response)
 	}
 }
 

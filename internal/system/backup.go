@@ -657,7 +657,7 @@ func swapRestoredState(paths storage.Paths, stage, oldDir string) *protocol.Code
 }
 
 func rollbackRestoredState(paths storage.Paths, oldDir string) *protocol.CodedError {
-	names := []string{"moss.db", "raw", "wiki", "jobs", "trash"}
+	names := []string{"moss.db", "raw", "wiki", "jobs", "extractions", "trash"}
 	for i := len(names) - 1; i >= 0; i-- {
 		name := names[i]
 		active := filepath.Join(paths.Root, name)
@@ -712,7 +712,7 @@ func allowedBackupEntry(path string) bool {
 	if path == "database/moss.db" {
 		return true
 	}
-	for _, prefix := range []string{"raw/", "wiki/", "jobs/", "trash/"} {
+	for _, prefix := range []string{"raw/", "wiki/", "jobs/", "extractions/", "trash/"} {
 		if strings.HasPrefix(path, prefix) && len(path) > len(prefix) {
 			return true
 		}

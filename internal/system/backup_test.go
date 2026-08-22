@@ -20,7 +20,7 @@ func TestBackupPathAndArchiveEntryGuards(t *testing.T) {
 			t.Fatalf("parent path was not detected: %q", value)
 		}
 	}
-	for _, value := range []string{"database/moss.db", "raw/blobs/a.raw", "wiki/articles/a.md", "jobs/j/output.json", "trash/old.md"} {
+	for _, value := range []string{"database/moss.db", "raw/blobs/a.raw", "wiki/articles/a.md", "jobs/j/output.json", "extractions/e.json", "trash/old.md"} {
 		if !allowedBackupEntry(value) {
 			t.Fatalf("allowed entry rejected: %q", value)
 		}

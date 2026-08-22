@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenquan/moss/internal/knowledge"
 	"github.com/chenquan/moss/internal/protocol"
 	"github.com/chenquan/moss/internal/storage"
 )
@@ -857,6 +858,10 @@ func applyRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan
 	if err := verifyFile(store, path, hash, filepath.Join(store.Paths.Wiki, "articles")); err != nil {
 		return err
 	}
+	parsed, err := knowledge.ParseManagedArticle([]byte(target.TargetContent))
+	if err != nil || parsed.ArticleID != target.ArticleID || parsed.Version != target.TargetVersion {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "rollback target metadata is invalid", false, nil)
+	}
 	staged := filepath.Join(store.Paths.Staging, plan.PlanID+"-rollback.md")
 	if err := writePrivateFile(staged, []byte(target.TargetContent)); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot stage rollback article", true, nil)
@@ -864,10 +869,13 @@ func applyRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan
 	if err := os.Rename(staged, path); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot apply rollback article", true, nil)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE articles SET current_version = ?, current_hash = ?, updated_at = ? WHERE article_id = ? AND current_version = ? AND current_hash = ?`, target.TargetVersion, target.TargetHash, time.Now().UTC().Format(time.RFC3339Nano), target.ArticleID, target.CurrentVersion, target.CurrentHash); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE articles SET title = ?, slug = ?, sensitivity = ?, current_version = ?, current_hash = ?, updated_at = ? WHERE article_id = ? AND current_version = ? AND current_hash = ?`, parsed.Title, parsed.Slug, parsed.Sensitivity, target.TargetVersion, target.TargetHash, time.Now().UTC().Format(time.RFC3339Nano), target.ArticleID, target.CurrentVersion, target.CurrentHash); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot update rollback article", true, nil)
 	}
-	if err := storage.ReplaceArticleIndexTx(ctx, tx, target.ArticleID, target.TargetVersion, "", "", "", "", target.TargetContent, ""); err != nil {
+	if err := replaceRollbackCitations(ctx, tx, parsed); err != nil {
+		return err
+	}
+	if err := storage.ReplaceArticleIndexTx(ctx, tx, target.ArticleID, target.TargetVersion, parsed.Title, parsed.Slug, strings.Join(parsed.Tags, " "), parsed.Summary, parsed.Body, strings.Join(parsed.SourceIDs, " ")); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot update rollback article index", true, nil)
 	}
 	return nil
@@ -893,6 +901,10 @@ func undoRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan 
 	if err := verifyFile(store, path, hash, filepath.Join(store.Paths.Wiki, "articles")); err != nil {
 		return err
 	}
+	parsed, err := knowledge.ParseManagedArticle([]byte(previous.CurrentContent))
+	if err != nil || parsed.ArticleID != previous.ArticleID || parsed.Version != previous.CurrentVersion {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "rollback undo metadata is invalid", false, nil)
+	}
 	staged := filepath.Join(store.Paths.Staging, plan.PlanID+"-rollback-undo.md")
 	if err := writePrivateFile(staged, []byte(previous.CurrentContent)); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot stage rollback undo", true, nil)
@@ -900,11 +912,26 @@ func undoRollback(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan 
 	if err := os.Rename(staged, path); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore rollback article", true, nil)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE articles SET current_version = ?, current_hash = ?, updated_at = ? WHERE article_id = ? AND current_version = ? AND current_hash = ?`, previous.CurrentVersion, previous.CurrentHash, time.Now().UTC().Format(time.RFC3339Nano), previous.ArticleID, target.TargetVersion, target.TargetHash); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE articles SET title = ?, slug = ?, sensitivity = ?, current_version = ?, current_hash = ?, updated_at = ? WHERE article_id = ? AND current_version = ? AND current_hash = ?`, parsed.Title, parsed.Slug, parsed.Sensitivity, previous.CurrentVersion, previous.CurrentHash, time.Now().UTC().Format(time.RFC3339Nano), previous.ArticleID, target.TargetVersion, target.TargetHash); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore rollback metadata", true, nil)
 	}
-	if err := storage.ReplaceArticleIndexTx(ctx, tx, previous.ArticleID, previous.CurrentVersion, "", "", "", "", previous.CurrentContent, ""); err != nil {
+	if err := replaceRollbackCitations(ctx, tx, parsed); err != nil {
+		return err
+	}
+	if err := storage.ReplaceArticleIndexTx(ctx, tx, previous.ArticleID, previous.CurrentVersion, parsed.Title, parsed.Slug, strings.Join(parsed.Tags, " "), parsed.Summary, parsed.Body, strings.Join(parsed.SourceIDs, " ")); err != nil {
 		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore rollback article index", true, nil)
+	}
+	return nil
+}
+
+func replaceRollbackCitations(ctx context.Context, tx *sql.Tx, article knowledge.ManagedArticle) *protocol.CodedError {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM article_citations WHERE article_id = ? AND version = ?`, article.ArticleID, article.Version); err != nil {
+		return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot replace rollback article citations", true, nil)
+	}
+	for _, citation := range article.Citations {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO article_citations(article_id, version, source_id, locator) VALUES (?, ?, ?, ?)`, article.ArticleID, article.Version, citation.SourceID, citation.Locator); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore rollback article citation", true, nil)
+		}
 	}
 	return nil
 }

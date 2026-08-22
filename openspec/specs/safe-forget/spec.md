@@ -48,6 +48,8 @@ Moss SHALL implement `knowledge.rollback.plan` for a selected managed article an
 - **WHEN** a pending rollback plan is confirmed and the current article still matches its base version/hash
 - **THEN** `plan.apply` replaces the managed file atomically, updates the current article pointer, and records audit evidence
 
+Rollback and rollback undo SHALL restore the target Markdown frontmatter, Article metadata, citations, and FTS projection together with the current version/hash.
+
 #### Scenario: Rollback after later edit
 - **WHEN** the article version or Wiki hash changed after rollback preview
 - **THEN** Moss returns `PLAN_STALE` or `WIKI_DRIFT` without overwriting the later edit
@@ -62,4 +64,3 @@ Moss SHALL implement `audit.query` as a read-only, deterministic, bounded operat
 #### Scenario: Invalid audit limit
 - **WHEN** the requested limit is outside the supported range
 - **THEN** Moss returns `REQUEST_INVALID` without reading unbounded rows
-

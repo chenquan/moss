@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenquan/moss/internal/knowledge"
 	"github.com/chenquan/moss/internal/protocol"
 	"github.com/chenquan/moss/internal/storage"
 )
@@ -73,6 +74,24 @@ type markSensitiveData struct {
 	Changed              bool     `json:"changed"`
 	PropagatedArticleIDs []string `json:"propagated_article_ids,omitempty"`
 	PropagatedActionIDs  []string `json:"propagated_action_ids,omitempty"`
+}
+
+type articleSensitivityProjection struct {
+	id             string
+	path           string
+	oldContent     []byte
+	newContent     []byte
+	oldVersion     int
+	oldHash        string
+	oldSensitivity string
+	newVersion     int
+	newHash        string
+	article        knowledge.ManagedArticle
+}
+
+func articleContentHash(contents []byte) string {
+	hash := sha256.Sum256(contents)
+	return "sha256:" + hex.EncodeToString(hash[:])
 }
 
 func Ingest(ctx context.Context, store *storage.Storage, req protocol.Request) (protocol.Response, *protocol.CodedError) {
@@ -260,6 +279,19 @@ func MarkSensitive(ctx context.Context, store *storage.Storage, req protocol.Req
 		return protocol.Response{}, protocol.NewCodedError("CONFIRMATION_REQUIRED", "lowering source sensitivity requires explicit Skill confirmation", false, map[string]any{"previous": previous, "requested": args.Sensitivity})
 	}
 	data := markSensitiveData{SourceID: args.SourceID, PreviousSensitivity: previous, Sensitivity: args.Sensitivity, Changed: previous != args.Sensitivity, PropagatedArticleIDs: make([]string, 0), PropagatedActionIDs: make([]string, 0)}
+	projections := make([]articleSensitivityProjection, 0)
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		for _, projection := range projections {
+			_ = os.WriteFile(projection.path, projection.oldContent, 0600)
+			if projection.newContent != nil {
+				_ = os.Remove(filepath.Join(store.Paths.Staging, "sensitivity-"+projection.id+".md"))
+			}
+		}
+	}()
 	if data.Changed {
 		result, err := tx.ExecContext(ctx, `UPDATE sources SET sensitivity = ? WHERE source_id = ? AND sensitivity = ? AND forgotten_at IS NULL`, args.Sensitivity, args.SourceID, previous)
 		if err != nil {
@@ -269,29 +301,71 @@ func MarkSensitive(ctx context.Context, store *storage.Storage, req protocol.Req
 			return protocol.Response{}, protocol.NewCodedError("SOURCE_CHANGED", "source sensitivity changed before update", false, nil)
 		}
 		if nextRank > previousRank {
-			articleRows, err := tx.QueryContext(ctx, `SELECT DISTINCT a.article_id, a.sensitivity FROM articles a JOIN article_citations c ON c.article_id = a.article_id WHERE c.source_id = ? AND a.forgotten_at IS NULL ORDER BY a.article_id`, args.SourceID)
+			articleRows, err := tx.QueryContext(ctx, `SELECT DISTINCT a.article_id FROM articles a JOIN article_citations c ON c.article_id = a.article_id WHERE c.source_id = ? AND a.forgotten_at IS NULL ORDER BY a.article_id`, args.SourceID)
 			if err != nil {
 				return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot inspect linked article sensitivity", true, nil)
 			}
+			articleIDs := make([]string, 0)
 			for articleRows.Next() {
-				var articleID, sensitivity string
-				if err := articleRows.Scan(&articleID, &sensitivity); err != nil {
+				var articleID string
+				if err := articleRows.Scan(&articleID); err != nil {
 					articleRows.Close()
 					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode linked article sensitivity", true, nil)
 				}
-				if sensitivityRank(sensitivity) < nextRank {
-					if _, err := tx.ExecContext(ctx, `UPDATE articles SET sensitivity = ?, updated_at = ? WHERE article_id = ? AND forgotten_at IS NULL AND sensitivity = ?`, args.Sensitivity, time.Now().UTC().Format(time.RFC3339Nano), articleID, sensitivity); err != nil {
-						articleRows.Close()
-						return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot propagate article sensitivity", true, nil)
-					}
-					data.PropagatedArticleIDs = append(data.PropagatedArticleIDs, articleID)
-				}
+				articleIDs = append(articleIDs, articleID)
 			}
 			if err := articleRows.Err(); err != nil {
 				articleRows.Close()
 				return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot finish linked article sensitivity read", true, nil)
 			}
 			articleRows.Close()
+			for _, articleID := range articleIDs {
+				article, oldContent, articlePath, readErr := knowledge.ReadManagedArticleByID(ctx, store, articleID)
+				if readErr != nil {
+					return protocol.Response{}, readErr
+				}
+				if sensitivityRank(article.Sensitivity) >= nextRank {
+					continue
+				}
+				var nextVersion int
+				if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) + 1 FROM article_versions WHERE article_id = ?`, articleID).Scan(&nextVersion); err != nil {
+					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot determine propagated article version", true, nil)
+				}
+				newContent, rewritten, err := knowledge.RewriteManagedArticleSensitivity(oldContent, args.Sensitivity, nextVersion)
+				if err != nil {
+					return protocol.Response{}, protocol.NewCodedError("WIKI_DRIFT", "cannot render propagated article sensitivity", false, map[string]any{"article_id": articleID})
+				}
+				stagePath := filepath.Join(store.Paths.Staging, "sensitivity-"+articleID+".md")
+				if err := os.WriteFile(stagePath, newContent, 0600); err != nil {
+					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot stage propagated article", true, nil)
+				}
+				projection := articleSensitivityProjection{id: articleID, path: articlePath, oldContent: oldContent, newContent: newContent, oldVersion: article.Version, oldHash: articleContentHash(oldContent), oldSensitivity: article.Sensitivity, newVersion: nextVersion, newHash: articleContentHash(newContent), article: rewritten}
+				if err := os.Rename(stagePath, articlePath); err != nil {
+					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot replace propagated article", true, nil)
+				}
+				projections = append(projections, projection)
+				data.PropagatedArticleIDs = append(data.PropagatedArticleIDs, articleID)
+			}
+			for _, projection := range projections {
+				result, err := tx.ExecContext(ctx, `UPDATE articles SET sensitivity = ?, current_version = ?, current_hash = ?, updated_at = ? WHERE article_id = ? AND current_version = ? AND current_hash = ? AND sensitivity = ?`, args.Sensitivity, projection.newVersion, projection.newHash, time.Now().UTC().Format(time.RFC3339Nano), projection.id, projection.oldVersion, projection.oldHash, projection.oldSensitivity)
+				if err != nil {
+					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot propagate article sensitivity", true, nil)
+				}
+				if affected, _ := result.RowsAffected(); affected != 1 {
+					return protocol.Response{}, protocol.NewCodedError("PLAN_STALE", "article changed before sensitivity propagation", false, map[string]any{"article_id": projection.id})
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO article_versions(article_id, version, content_hash, path, content, job_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)`, projection.id, projection.newVersion, projection.newHash, store.Relative(projection.path), string(projection.newContent), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot record propagated article version", true, nil)
+				}
+				if err := storage.ReplaceArticleIndexTx(ctx, tx, projection.id, projection.newVersion, projection.article.Title, projection.article.Slug, strings.Join(projection.article.Tags, " "), projection.article.Summary, projection.article.Body, strings.Join(projection.article.SourceIDs, " ")); err != nil {
+					return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot update propagated article index", true, nil)
+				}
+				for _, citation := range projection.article.Citations {
+					if _, err := tx.ExecContext(ctx, `INSERT INTO article_citations(article_id, version, source_id, locator) VALUES (?, ?, ?, ?)`, projection.id, projection.newVersion, citation.SourceID, citation.Locator); err != nil {
+						return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot record propagated article citation", true, nil)
+					}
+				}
+			}
 			actionRows, err := tx.QueryContext(ctx, `SELECT action_id, sensitivity FROM actions WHERE source_id = ? AND forgotten_at IS NULL ORDER BY action_id`, args.SourceID)
 			if err != nil {
 				return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot inspect linked action sensitivity", true, nil)
@@ -328,6 +402,7 @@ func MarkSensitive(ctx context.Context, store *storage.Storage, req protocol.Req
 	if err := tx.Commit(); err != nil {
 		return protocol.Response{}, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot commit source sensitivity", true, nil)
 	}
+	committed = true
 	return response, nil
 }
 

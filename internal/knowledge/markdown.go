@@ -1,7 +1,9 @@
 package knowledge
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,12 +20,12 @@ import (
 
 const maxArticleBytes = 2 << 20
 
-type citation struct {
+type ManagedCitation struct {
 	SourceID string `json:"source_id"`
 	Locator  string `json:"locator"`
 }
 
-type parsedArticle struct {
+type ManagedArticle struct {
 	ArticleID   string
 	Title       string
 	Slug        string
@@ -32,9 +34,12 @@ type parsedArticle struct {
 	Version     int
 	Tags        []string
 	SourceIDs   []string
-	Citations   []citation
+	Citations   []ManagedCitation
 	Body        string
 }
+
+type citation = ManagedCitation
+type parsedArticle = ManagedArticle
 
 type articleRow struct {
 	ArticleID   string
@@ -89,6 +94,21 @@ func readManagedArticle(store *storage.Storage, row articleRow) (parsedArticle, 
 		return parsedArticle{}, nil, path, protocol.NewCodedError("WIKI_DRIFT", "managed article metadata does not match its recorded version", false, map[string]any{"path": path})
 	}
 	return parsed, contents, path, nil
+}
+
+// ReadManagedArticleByID loads and fully verifies the current managed
+// projection for an article. It is used by mutation paths that must preserve
+// the same drift guarantees as retrieval.
+func ReadManagedArticleByID(ctx context.Context, store *storage.Storage, articleID string) (ManagedArticle, []byte, string, *protocol.CodedError) {
+	var row articleRow
+	err := store.DB.QueryRowContext(ctx, `SELECT article_id, slug, title, path, sensitivity, current_version, current_hash, created_at, updated_at FROM articles WHERE article_id = ? AND forgotten_at IS NULL`, articleID).Scan(&row.ArticleID, &row.Slug, &row.Title, &row.Path, &row.Sensitivity, &row.Version, &row.Hash, &row.CreatedAt, &row.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ManagedArticle{}, nil, "", protocol.NewCodedError("ARTICLE_NOT_FOUND", "article was not found", false, nil)
+	}
+	if err != nil {
+		return ManagedArticle{}, nil, "", protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read article metadata", true, nil)
+	}
+	return readManagedArticle(store, row)
 }
 
 func parseManagedMarkdown(contents []byte) (parsedArticle, error) {
@@ -209,6 +229,73 @@ func parseManagedMarkdown(contents []byte) (parsedArticle, error) {
 	result.SourceIDs = uniqueStrings(result.SourceIDs)
 	result.Citations = uniqueCitations(result.Citations)
 	return result, nil
+}
+
+// ParseManagedArticle validates and decodes a managed article projection.
+// Callers that mutate an article must preserve the complete projection rather
+// than editing only the body or a single frontmatter field.
+func ParseManagedArticle(contents []byte) (ManagedArticle, error) {
+	return parseManagedMarkdown(contents)
+}
+
+// RenderManagedArticle renders the deterministic managed Markdown format.
+func RenderManagedArticle(article ManagedArticle) []byte {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("moss_article_id: ")
+	b.WriteString(strconv.Quote(article.ArticleID))
+	b.WriteString("\n")
+	b.WriteString("title: ")
+	b.WriteString(strconv.Quote(article.Title))
+	b.WriteString("\n")
+	b.WriteString("slug: ")
+	b.WriteString(strconv.Quote(article.Slug))
+	b.WriteString("\n")
+	b.WriteString("summary: ")
+	b.WriteString(strconv.Quote(article.Summary))
+	b.WriteString("\n")
+	b.WriteString("sensitivity: ")
+	b.WriteString(article.Sensitivity)
+	b.WriteString("\n")
+	b.WriteString("version: ")
+	b.WriteString(strconv.Itoa(article.Version))
+	b.WriteString("\n")
+	b.WriteString("tags:\n")
+	for _, tag := range uniqueStrings(article.Tags) {
+		b.WriteString("  - ")
+		b.WriteString(strconv.Quote(tag))
+		b.WriteString("\n")
+	}
+	b.WriteString("sources:\n")
+	for _, source := range uniqueStrings(article.SourceIDs) {
+		b.WriteString("  - ")
+		b.WriteString(strconv.Quote(source))
+		b.WriteString("\n")
+	}
+	b.WriteString("citations:\n")
+	for _, citation := range uniqueCitations(article.Citations) {
+		b.WriteString("  - source_id: ")
+		b.WriteString(strconv.Quote(citation.SourceID))
+		b.WriteString("\n    locator: ")
+		b.WriteString(strconv.Quote(citation.Locator))
+		b.WriteString("\n")
+	}
+	b.WriteString("---\n\n")
+	b.WriteString(strings.TrimRight(article.Body, "\n"))
+	b.WriteString("\n")
+	return []byte(b.String())
+}
+
+// RewriteManagedArticleSensitivity creates a new deterministic article
+// projection with the requested sensitivity and version.
+func RewriteManagedArticleSensitivity(contents []byte, sensitivity string, version int) ([]byte, ManagedArticle, error) {
+	article, err := parseManagedMarkdown(contents)
+	if err != nil {
+		return nil, ManagedArticle{}, err
+	}
+	article.Sensitivity = sensitivity
+	article.Version = version
+	return RenderManagedArticle(article), article, nil
 }
 
 func parseFrontmatterValue(value string) (string, error) {

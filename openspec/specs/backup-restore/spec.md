@@ -4,7 +4,7 @@
 TBD - created by archiving change cairn-bootstrap-upgrade. Update Purpose after archive.
 ## Requirements
 ### Requirement: Export a verified local backup
-Moss SHALL implement `system.export` as an idempotent machine operation that creates a private ZIP backup containing a SQLite-consistent snapshot, managed Raw/Wiki/Jobs/trash files, a schema version, and per-file SHA-256 manifest entries without returning personal content.
+Moss SHALL implement `system.export` as an idempotent machine operation that creates a private ZIP backup containing a SQLite-consistent snapshot, managed Raw/Wiki/Jobs/extractions/trash files, a schema version, and per-file SHA-256 manifest entries without returning personal content.
 
 Moss backup archives SHALL use the `moss-backup/v1` format identifier, `.moss-backup.zip` default extension, and `database/moss.db` snapshot path. Cairn-format archives are not compatible.
 
