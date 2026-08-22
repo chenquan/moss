@@ -38,7 +38,7 @@ func newSkillCommand() *cobra.Command {
 	}
 	installCommand.Flags().StringArrayVar(&targets, "target", []string{mossskill.TargetClaude}, "target editor; repeat for multiple targets: claude or codex")
 	installCommand.Flags().StringVar(&scope, "scope", mossskill.ScopeGlobal, "installation scope: global or project")
-	installCommand.Flags().BoolVar(&force, "force", false, "overwrite conflicting Skill files")
+	installCommand.Flags().BoolVar(&force, "force", false, "delete and recreate the entire Skill directory, including unrelated files")
 	installCommand.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		_, _ = fmt.Fprint(cmd.OutOrStdout(), cmd.UsageString())
 	})

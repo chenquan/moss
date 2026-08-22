@@ -26,8 +26,8 @@ The project SHALL provide a `moss skill install` command that installs the bundl
 - **WHEN** a user supplies `--target both`
 - **THEN** the command rejects the value and instructs the user to repeat `--target` with `claude` and `codex`
 
-### Requirement: Safe repeatable installation
-The installer SHALL make identical existing files a no-op, SHALL refuse differing existing files by default, and SHALL overwrite only conflicting Skill files when the user explicitly supplies `--force`; it SHALL not delete unrelated files.
+### Requirement: Repeatable installation and explicit replacement
+The installer SHALL make identical existing files a no-op and SHALL refuse differing existing files by default. When the user explicitly supplies `--force`, it SHALL delete the complete destination Skill directory, including unrelated files, and recreate it from the bundled resources.
 
 #### Scenario: Reinstall identical resources
 - **WHEN** the destination already contains the same Skill file bytes
@@ -37,9 +37,9 @@ The installer SHALL make identical existing files a no-op, SHALL refuse differin
 - **WHEN** a destination Skill file differs from the bundled resource and `--force` is absent
 - **THEN** the command fails before writing and reports the conflicting path
 
-#### Scenario: Explicit overwrite
+#### Scenario: Forced directory replacement
 - **WHEN** a destination Skill file differs and the user supplies `--force`
-- **THEN** the command atomically replaces that file while preserving unrelated destination files
+- **THEN** the command deletes the complete destination Skill directory and writes every bundled Skill resource again
 
 ### Requirement: Installed resources are self-contained
 The installer SHALL use the versioned Skill resources bundled in the binary and SHALL not require a source checkout, network access, or execution of Markdown content.

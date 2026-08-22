@@ -75,6 +75,15 @@ func Install(options InstallOptions) ([]InstallResult, error) {
 		}
 		roots = append(roots, root)
 	}
+	if options.Force {
+		// Force is an explicit directory replacement. All destinations are
+		// validated above before any one of them is removed.
+		for index, root := range roots {
+			if err := removeDestination(root); err != nil {
+				return nil, fmt.Errorf("replace %s Skill: %w", targets[index], err)
+			}
+		}
+	}
 
 	for index, target := range targets {
 		installed, skipped, err := installFiles(roots[index], assets, options.Force)
@@ -196,6 +205,9 @@ func preflight(root string, assets []assetFile, force bool) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("inspect skill destination %s: %w", root, err)
 	}
+	if force {
+		return nil
+	}
 	for _, asset := range assets {
 		path := filepath.Join(root, asset.Path)
 		info, err := os.Lstat(path)
@@ -215,6 +227,23 @@ func preflight(root string, assets []assetFile, force bool) error {
 		if string(existing) != string(asset.Data) && !force {
 			return fmt.Errorf("Skill file conflict at %s; rerun with --force to overwrite", path)
 		}
+	}
+	return nil
+}
+
+func removeDestination(root string) error {
+	info, err := os.Lstat(root)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect skill destination %s: %w", root, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("skill destination is not a directory: %s", root)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return fmt.Errorf("remove existing Skill destination %s: %w", root, err)
 	}
 	return nil
 }

@@ -103,7 +103,7 @@ func TestInstallDeduplicatesRepeatedTargets(t *testing.T) {
 	}
 }
 
-func TestInstallConflictRequiresForceAndPreservesUnrelatedFiles(t *testing.T) {
+func TestInstallConflictRequiresForceAndReplacesDestination(t *testing.T) {
 	project := t.TempDir()
 	options := InstallOptions{Targets: []string{TargetClaude}, Scope: ScopeProject, ProjectDir: project}
 	if _, err := Install(options); err != nil {
@@ -132,8 +132,19 @@ func TestInstallConflictRequiresForceAndPreservesUnrelatedFiles(t *testing.T) {
 	if bytes.Equal(content, []byte("user edit")) {
 		t.Fatal("force did not replace conflicting Skill file")
 	}
-	if preserved, err := os.ReadFile(unrelated); err != nil || string(preserved) != "keep" {
-		t.Fatalf("unrelated file was not preserved: %q, %v", preserved, err)
+	if _, err := os.Stat(unrelated); !os.IsNotExist(err) {
+		t.Fatalf("force preserved unrelated file or returned an unexpected error: %v", err)
+	}
+	forced, err := Install(InstallOptions{Targets: []string{TargetClaude}, Scope: ScopeProject, ProjectDir: project, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := loadAssets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forced[0].Installed != len(assets) || forced[0].Skipped != 0 {
+		t.Fatalf("force install result = %+v", forced[0])
 	}
 }
 
