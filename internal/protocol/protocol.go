@@ -209,6 +209,7 @@ func SupportedCapabilities() []Capability {
 		{Operation: "knowledge.catalog", Description: "List the managed knowledge catalogue"},
 		{Operation: "knowledge.candidates", Description: "Find local knowledge candidates"},
 		{Operation: "knowledge.history", Description: "Read managed article history"},
+		{Operation: "knowledge.insights", Description: "Read deterministic decision review insights"},
 		{Operation: "knowledge.materialize", Description: "Read a verified managed article"},
 		{Operation: "knowledge.reindex", Mutating: true, Description: "Rebuild the local article search index without model calls"},
 		{Operation: "knowledge.backfill.plan", Mutating: true, Description: "Create an explicit legacy backfill manifest; model compilation remains Skill-driven"},

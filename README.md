@@ -284,7 +284,7 @@ Moss 会为每个 Job 返回当前阶段的输入文件、JSON Schema 和结果�
 
 ### 检索知识
 
-常用顺序是：
+普通知识问题的常用顺序是：
 
 ~~~
 knowledge.catalog / knowledge.candidates
@@ -293,6 +293,28 @@ knowledge.materialize
 ~~~
 
 `knowledge.catalog` 用于浏览目录和主题，`knowledge.candidates` 用于本地确定性候选排序，`knowledge.materialize` 用于读取经过哈希校验的单篇文章。文章被外部修改后会报告 `WIKI_DRIFT`，不会被静默覆盖或当作已验证内容返回。
+
+决策审阅问题可以先调用 `knowledge.insights`。它从现有决策事实、事实版本、来源引用、文章和行动中派生待复核信号，包括 `stale`、`superseded`、`retracted` 和 `evidence_unavailable`。查询支持可选的 `topic` 和 `limit`；结果按审阅优先级稳定排序，并限制决策、引用、文章和行动的返回数量。
+
+使用要点：
+
+- `superseded` 既可能表示同一事实的旧版本，也可能通过 `superseded_by_fact_id` / `superseded_by_version` 指向另一个明确替代它的决策事实。
+- `evidence_unavailable` 表示引用来源或抽取工件当前不可验证；不要把该决策当作已有完整证据支持的结论。
+- 行动关联会标记为 `shared_source`，只表示共享证据，不表示因果关系；文章只返回经过受管路径和哈希检查的元数据，不内联未经验证的正文。
+- 敏感或受限的决策及关联默认被过滤；只有在确有必要时，才在请求 `options` 中显式设置 `"allow_sensitive": true`。
+- 首期不会推断 `contradicts`，也不会自动修改知识。
+
+典型请求只需要提供操作和可选参数：
+
+~~~json
+{
+  "operation": "knowledge.insights",
+  "arguments": {
+    "topic": "发布策略",
+    "limit": 10
+  }
+}
+~~~
 
 敏感或受限文章、来源和历史默认不出现在检索结果中；读取需要显式传入：
 
@@ -341,7 +363,7 @@ action.apply（confirmed: true）
 | 系统 | `system.recover` | 写入/恢复 |
 | 来源 | `source.get`、`source.list` | 只读 |
 | 来源 | `source.ingest`、`source.mark_sensitive` | 写入 |
-| 知识 | `knowledge.catalog`、`knowledge.candidates`、`knowledge.materialize`、`knowledge.history` | 只读 |
+| 知识 | `knowledge.catalog`、`knowledge.candidates`、`knowledge.insights`、`knowledge.materialize`、`knowledge.history` | 只读 |
 | 编译 | `compile.next`、`compile.status`、`plan.inspect`、`audit.query` | 只读 |
 | 编译 | `compile.start`、`compile.submit`、`compile.preview`、`compile.apply`、`compile.abort` | 写入/计划 |
 | 计划 | `plan.apply`、`plan.undo` | 写入/确认 |

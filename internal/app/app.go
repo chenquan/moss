@@ -200,7 +200,7 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 			}
 			return protocol.NewSuccessResponse(req, data), nil
 		}
-	case "knowledge.catalog", "knowledge.candidates", "knowledge.materialize", "knowledge.history", "knowledge.reindex", "knowledge.backfill.plan":
+	case "knowledge.catalog", "knowledge.candidates", "knowledge.insights", "knowledge.materialize", "knowledge.history", "knowledge.reindex", "knowledge.backfill.plan":
 		var store *storage.Storage
 		var codedErr *protocol.CodedError
 		if req.Operation == "knowledge.reindex" || req.Operation == "knowledge.backfill.plan" {
@@ -221,6 +221,12 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 			return protocol.NewSuccessResponse(req, data), nil
 		case "knowledge.candidates":
 			data, err := knowledge.Candidates(ctx, store, req)
+			if err != nil {
+				return protocol.Response{}, err
+			}
+			return protocol.NewSuccessResponse(req, data), nil
+		case "knowledge.insights":
+			data, err := knowledge.Insights(ctx, store, req)
 			if err != nil {
 				return protocol.Response{}, err
 			}

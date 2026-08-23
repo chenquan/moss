@@ -47,6 +47,7 @@ Use this shape for every request. `arguments` is always an object, even when it 
 | Stop compilation | `compile.abort` | `job_id` | **MUTATING**; do not abort an applied job |
 | Browse knowledge | `knowledge.catalog` | optional `topic`, `limit` | read-only |
 | Search knowledge | `knowledge.candidates` | `query`, optional `topic`, `limit` | read-only; use summaries only for selection |
+| Review decisions | `knowledge.insights` | optional `topic`, `limit`; optional `options.allow_sensitive` | read-only; lifecycle signals are evidence, and `shared_source` action links are not causal |
 | Rebuild search index | `knowledge.reindex` | none | **MUTATING**; explicit maintenance only, never invokes a model |
 | Plan legacy backfill | `knowledge.backfill.plan` | optional `source_ids`, `limit` | **MUTATING** manifest only; Skill must start/review compile jobs; never automatic on upgrade |
 | Read selected article | `knowledge.materialize` | exactly one `article_id` or `slug`; optional `options.inline_content` | read-only; cite returned article/source references; use the returned managed path and `bytes` when content is not inline |
@@ -63,6 +64,17 @@ Use this shape for every request. `arguments` is always an object, even when it 
 | Restore a backup | `system.restore` | managed `backup_path`, `confirmed: true` | **MUTATING**; export first, preflight health, and require explicit confirmation |
 
 `compile.apply`, `action.apply`, `plan.apply`, `plan.undo`, and confirmed `system.restore` are final state-changing gateways. A plan creation response is not proof that the change has been applied.
+
+### Decision review with `knowledge.insights`
+
+Use `knowledge.insights` before composing an answer about why a decision was made, which decisions need review, or which actions share its evidence. The operation is read-only and derives a bounded result from current decision facts, versions, citations, sources, extractions, articles, and actions.
+
+- Send only the optional `topic` and `limit` arguments; use `options.allow_sensitive: true` only when the user has an explicit need for sensitive or restricted material.
+- Read `decisions` and `review_items` together. `stale`, `superseded`, and `retracted` are lifecycle signals; `evidence_unavailable` means the cited source or extraction cannot currently be verified.
+- If a `superseded` item includes `superseded_by_fact_id` and `superseded_by_version`, preserve those identifiers for follow-up instead of treating the old decision as current.
+- Treat an action's `association: shared_source` as evidence overlap only. It is not a causal or dependency relationship.
+- Article associations contain metadata only. If `drift` is true, or if evidence is unavailable, do not quote or infer from the unverified content; use the existing managed materialization/history flow for a verified follow-up.
+- Never infer `contradicts`, repair facts, or write actions from an insights response. Any mutation requires its own plan and confirmation workflow.
 
 ## 3. Compile stage rules
 
