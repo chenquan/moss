@@ -55,12 +55,17 @@ func TestSchemaV4UpgradeAddsKnowledgeCompilerState(t *testing.T) {
 	}
 	defer upgraded.Close()
 	var version string
-	if err := upgraded.DB.QueryRow(`SELECT value FROM schema_meta WHERE key = 'schema_version'`).Scan(&version); err != nil || version != "5" {
+	if err := upgraded.DB.QueryRow(`SELECT value FROM schema_meta WHERE key = 'schema_version'`).Scan(&version); err != nil || version != "6" {
 		t.Fatalf("schema version = %q, err = %v", version, err)
 	}
 	var table string
 	if err := upgraded.DB.QueryRow(`SELECT name FROM sqlite_master WHERE name = 'article_fts'`).Scan(&table); err != nil || table != "article_fts" {
 		t.Fatalf("article index = %q, err = %v", table, err)
+	}
+	for _, tableName := range []string{"relations", "compile_batch_relations", "action_results", "action_result_plans"} {
+		if err := upgraded.DB.QueryRow(`SELECT name FROM sqlite_master WHERE name = ?`, tableName).Scan(&table); err != nil || table != tableName {
+			t.Fatalf("additive table %q = %q, err = %v", tableName, table, err)
+		}
 	}
 }
 

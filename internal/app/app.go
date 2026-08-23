@@ -200,7 +200,7 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 			}
 			return protocol.NewSuccessResponse(req, data), nil
 		}
-	case "knowledge.catalog", "knowledge.candidates", "knowledge.insights", "knowledge.materialize", "knowledge.history", "knowledge.reindex", "knowledge.backfill.plan":
+	case "knowledge.catalog", "knowledge.candidates", "knowledge.insights", "knowledge.review.scan", "knowledge.context.bundle", "knowledge.materialize", "knowledge.history", "knowledge.reindex", "knowledge.backfill.plan":
 		var store *storage.Storage
 		var codedErr *protocol.CodedError
 		if req.Operation == "knowledge.reindex" || req.Operation == "knowledge.backfill.plan" {
@@ -231,6 +231,18 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 				return protocol.Response{}, err
 			}
 			return protocol.NewSuccessResponse(req, data), nil
+		case "knowledge.review.scan":
+			data, err := knowledge.ReviewScan(ctx, store, req)
+			if err != nil {
+				return protocol.Response{}, err
+			}
+			return protocol.NewSuccessResponse(req, data), nil
+		case "knowledge.context.bundle":
+			data, err := knowledge.ContextBundle(ctx, store, req)
+			if err != nil {
+				return protocol.Response{}, err
+			}
+			return protocol.NewSuccessResponse(req, data), nil
 		case "knowledge.materialize":
 			data, err := knowledge.Materialize(ctx, store, req)
 			if err != nil {
@@ -256,7 +268,7 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 			}
 			return protocol.NewSuccessResponse(req, data), nil
 		}
-	case "action.create.plan", "action.update.plan", "action.apply":
+	case "action.create.plan", "action.update.plan", "action.apply", "action.result.plan", "action.result.apply":
 		store, codedErr := openMutableStorage(ctx)
 		if codedErr != nil {
 			return protocol.Response{}, codedErr
@@ -267,6 +279,10 @@ func dispatch(ctx context.Context, req protocol.Request) (protocol.Response, *pr
 			return action.CreatePlan(ctx, store, req)
 		case "action.update.plan":
 			return action.UpdatePlan(ctx, store, req)
+		case "action.result.plan":
+			return action.ResultPlan(ctx, store, req)
+		case "action.result.apply":
+			return action.ResultApply(ctx, store, req)
 		default:
 			return action.Apply(ctx, store, req)
 		}

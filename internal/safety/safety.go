@@ -74,12 +74,14 @@ type safetyPlan struct {
 }
 
 type forgetTarget struct {
-	Sources  []forgetSource  `json:"sources"`
-	Blobs    []forgetBlob    `json:"blobs"`
-	Articles []forgetArticle `json:"articles"`
-	Facts    []forgetFact    `json:"facts"`
-	Actions  []forgetAction  `json:"actions"`
-	Jobs     []forgetJob     `json:"jobs"`
+	Sources   []forgetSource   `json:"sources"`
+	Blobs     []forgetBlob     `json:"blobs"`
+	Articles  []forgetArticle  `json:"articles"`
+	Facts     []forgetFact     `json:"facts"`
+	Actions   []forgetAction   `json:"actions"`
+	Results   []forgetResult   `json:"action_results"`
+	Relations []forgetRelation `json:"relations"`
+	Jobs      []forgetJob      `json:"jobs"`
 }
 
 type forgetFact struct {
@@ -116,6 +118,33 @@ type forgetArticle struct {
 type forgetAction struct {
 	ActionID    string `json:"action_id"`
 	ForgottenAt string `json:"forgotten_at,omitempty"`
+}
+
+type forgetResult struct {
+	ResultID    string `json:"result_id"`
+	ActionID    string `json:"action_id"`
+	Version     int    `json:"version"`
+	Status      string `json:"status"`
+	Summary     string `json:"summary"`
+	SourceID    string `json:"source_id,omitempty"`
+	Sensitivity string `json:"sensitivity"`
+	Metadata    string `json:"metadata_json,omitempty"`
+	CreatedAt   string `json:"created_at"`
+}
+
+type forgetRelation struct {
+	RelationID   string `json:"relation_id"`
+	RelationType string `json:"relation_type"`
+	FromType     string `json:"from_type"`
+	FromID       string `json:"from_id"`
+	FromVersion  int    `json:"from_version"`
+	ToType       string `json:"to_type"`
+	ToID         string `json:"to_id"`
+	ToVersion    int    `json:"to_version"`
+	SourceID     string `json:"source_id,omitempty"`
+	OriginKind   string `json:"origin_kind"`
+	OriginID     string `json:"origin_id,omitempty"`
+	CreatedAt    string `json:"created_at"`
 }
 
 type forgetJob struct {
@@ -481,7 +510,7 @@ func resolveForget(ctx context.Context, store *storage.Storage, args forgetArgum
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	target := forgetTarget{Sources: make([]forgetSource, 0), Blobs: make([]forgetBlob, 0), Articles: make([]forgetArticle, 0), Facts: make([]forgetFact, 0), Actions: make([]forgetAction, 0), Jobs: make([]forgetJob, 0)}
+	target := forgetTarget{Sources: make([]forgetSource, 0), Blobs: make([]forgetBlob, 0), Articles: make([]forgetArticle, 0), Facts: make([]forgetFact, 0), Actions: make([]forgetAction, 0), Results: make([]forgetResult, 0), Relations: make([]forgetRelation, 0), Jobs: make([]forgetJob, 0)}
 	for _, id := range ids {
 		var source forgetSource
 		if err := store.DB.QueryRowContext(ctx, `SELECT s.source_id, s.content_hash, b.raw_path, COALESCE(s.forgotten_at, '') FROM sources s JOIN blobs b ON b.content_hash = s.content_hash WHERE s.source_id = ? AND s.forgotten_at IS NULL`, id).Scan(&source.SourceID, &source.ContentHash, &source.RawPath, &source.ForgottenAt); errors.Is(err, sql.ErrNoRows) {
@@ -575,6 +604,86 @@ func resolveForget(ctx context.Context, store *storage.Storage, args forgetArgum
 		target.Actions = append(target.Actions, action)
 	}
 	actionRows.Close()
+	// Results and explicit relations belong to the same privacy impact
+	// closure. Snapshot them so a confirmed forget remains reversible.
+	actionIDs := make([]string, 0, len(target.Actions))
+	for _, action := range target.Actions {
+		actionIDs = append(actionIDs, action.ActionID)
+	}
+	resultQuery := `SELECT result_id, action_id, version, status, summary, COALESCE(source_id, ''), sensitivity, COALESCE(metadata_json, ''), created_at FROM action_results WHERE forgotten_at IS NULL AND (source_id IN (` + placeholders(len(ids)) + `)`
+	resultArgs := stringSlice(ids)
+	if len(actionIDs) > 0 {
+		resultQuery += ` OR action_id IN (` + placeholders(len(actionIDs)) + `)`
+		resultArgs = append(resultArgs, stringSlice(actionIDs)...)
+	}
+	resultQuery += `) ORDER BY result_id`
+	resultRows, err := store.DB.QueryContext(ctx, resultQuery, resultArgs...)
+	if err != nil {
+		return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot resolve action results", true, nil)
+	}
+	for resultRows.Next() {
+		var result forgetResult
+		if err := resultRows.Scan(&result.ResultID, &result.ActionID, &result.Version, &result.Status, &result.Summary, &result.SourceID, &result.Sensitivity, &result.Metadata, &result.CreatedAt); err != nil {
+			resultRows.Close()
+			return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode action result", true, nil)
+		}
+		target.Results = append(target.Results, result)
+	}
+	resultRows.Close()
+	sourceSet := selected
+	articleSet, factSet, actionSet, resultSet := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, article := range target.Articles {
+		articleSet[article.ArticleID] = true
+	}
+	for _, fact := range target.Facts {
+		factSet[fact.FactID] = true
+	}
+	for _, action := range target.Actions {
+		actionSet[action.ActionID] = true
+	}
+	for _, result := range target.Results {
+		resultSet[result.ResultID] = true
+	}
+	relationRows, err := store.DB.QueryContext(ctx, `SELECT relation_id, relation_type, from_type, from_id, from_version, to_type, to_id, to_version, COALESCE(source_id, ''), origin_kind, COALESCE(origin_id, ''), created_at FROM relations ORDER BY relation_id`)
+	if err != nil {
+		return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot resolve dependent relations", true, nil)
+	}
+	for relationRows.Next() {
+		var relation forgetRelation
+		if err := relationRows.Scan(&relation.RelationID, &relation.RelationType, &relation.FromType, &relation.FromID, &relation.FromVersion, &relation.ToType, &relation.ToID, &relation.ToVersion, &relation.SourceID, &relation.OriginKind, &relation.OriginID, &relation.CreatedAt); err != nil {
+			relationRows.Close()
+			return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode dependent relation", true, nil)
+		}
+		affected := false
+		if relation.SourceID != "" {
+			_, affected = sourceSet[relation.SourceID]
+		}
+		endpointAffected := func(kind, id string) bool {
+			switch kind {
+			case knowledge.EndpointSource:
+				_, ok := sourceSet[id]
+				return ok
+			case knowledge.EndpointArticle:
+				_, ok := articleSet[id]
+				return ok
+			case knowledge.EndpointFact:
+				_, ok := factSet[id]
+				return ok
+			case knowledge.EndpointAction:
+				_, ok := actionSet[id]
+				return ok
+			case knowledge.EndpointActionResult:
+				_, ok := resultSet[id]
+				return ok
+			default:
+				return false
+			}
+		}
+		if affected || endpointAffected(relation.FromType, relation.FromID) || endpointAffected(relation.ToType, relation.ToID) {
+			target.Relations = append(target.Relations, relation)
+		}
+	}
+	relationRows.Close()
 	jobRows, err := store.DB.QueryContext(ctx, `SELECT job_id, state, COALESCE(current_stage, '') FROM compile_jobs WHERE source_id IN (`+placeholders(len(ids))+") ORDER BY job_id", stringSlice(ids)...)
 	if err != nil {
 		return forgetTarget{}, nil, nil, nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot resolve source jobs", true, nil)
@@ -588,7 +697,7 @@ func resolveForget(ctx context.Context, store *storage.Storage, args forgetArgum
 		target.Jobs = append(target.Jobs, job)
 	}
 	jobRows.Close()
-	impact := map[string]any{"sources": len(target.Sources), "raw_blobs": len(target.Blobs), "raw_blobs_to_trash": countMovableBlobs(target.Blobs), "articles": len(target.Articles), "facts": len(target.Facts), "actions": len(target.Actions), "compile_jobs": len(target.Jobs), "source_ids": ids}
+	impact := map[string]any{"sources": len(target.Sources), "raw_blobs": len(target.Blobs), "raw_blobs_to_trash": countMovableBlobs(target.Blobs), "articles": len(target.Articles), "facts": len(target.Facts), "actions": len(target.Actions), "action_results": len(target.Results), "relations": len(target.Relations), "compile_jobs": len(target.Jobs), "source_ids": ids}
 	diff := map[string]any{"kind": "forget", "source_ids": ids}
 	risk := []string{"privacy_impact", "reversible_trash"}
 	return target, impact, diff, risk, nil
@@ -781,6 +890,24 @@ func applyForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan s
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot mark forgotten action", true, nil)
 		}
 	}
+	for _, result := range target.Results {
+		if _, err := tx.ExecContext(ctx, `UPDATE action_results SET forgotten_at = ? WHERE result_id = ? AND action_id = ? AND version = ? AND forgotten_at IS NULL`, now, result.ResultID, result.ActionID, result.Version); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot mark forgotten action result", true, nil)
+		}
+	}
+	for _, relation := range target.Relations {
+		var relationType, fromType, fromID, toType, toID, sourceID, originKind, originID, createdAt string
+		var fromVersion, toVersion int
+		if err := tx.QueryRowContext(ctx, `SELECT relation_type, from_type, from_id, from_version, to_type, to_id, to_version, COALESCE(source_id, ''), origin_kind, COALESCE(origin_id, ''), created_at FROM relations WHERE relation_id = ?`, relation.RelationID).Scan(&relationType, &fromType, &fromID, &fromVersion, &toType, &toID, &toVersion, &sourceID, &originKind, &originID, &createdAt); err != nil {
+			return planStaleOrStorage(err, "forget relation changed")
+		}
+		if relationType != relation.RelationType || fromType != relation.FromType || fromID != relation.FromID || fromVersion != relation.FromVersion || toType != relation.ToType || toID != relation.ToID || toVersion != relation.ToVersion || sourceID != relation.SourceID || originKind != relation.OriginKind || originID != relation.OriginID || createdAt != relation.CreatedAt {
+			return protocol.NewCodedError("PLAN_STALE", "forget relation snapshot changed", false, nil)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE relation_id = ?`, relation.RelationID); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot remove forgotten relation", true, nil)
+		}
+	}
 	for _, job := range target.Jobs {
 		if _, err := tx.ExecContext(ctx, `UPDATE compile_jobs SET state = 'forgotten', current_stage = NULL, updated_at = ? WHERE job_id = ? AND state = ?`, now, job.JobID, job.State); err != nil {
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot mark forgotten compile job", true, nil)
@@ -874,6 +1001,16 @@ func undoForget(ctx context.Context, store *storage.Storage, tx *sql.Tx, plan sa
 	for _, action := range target.Actions {
 		if _, err := tx.ExecContext(ctx, `UPDATE actions SET forgotten_at = NULL, updated_at = ? WHERE action_id = ? AND forgotten_at IS NOT NULL`, time.Now().UTC().Format(time.RFC3339Nano), action.ActionID); err != nil {
 			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore action", true, nil)
+		}
+	}
+	for _, result := range target.Results {
+		if _, err := tx.ExecContext(ctx, `UPDATE action_results SET forgotten_at = NULL WHERE result_id = ? AND action_id = ? AND version = ? AND forgotten_at IS NOT NULL`, result.ResultID, result.ActionID, result.Version); err != nil {
+			return protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot restore action result", true, nil)
+		}
+	}
+	for _, relation := range target.Relations {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(relation_id, relation_type, from_type, from_id, from_version, to_type, to_id, to_version, source_id, origin_kind, origin_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), ?)`, relation.RelationID, relation.RelationType, relation.FromType, relation.FromID, relation.FromVersion, relation.ToType, relation.ToID, relation.ToVersion, relation.SourceID, relation.OriginKind, relation.OriginID, relation.CreatedAt); err != nil {
+			return protocol.NewCodedError("PLAN_STALE", "forgotten relation cannot be restored without conflict", false, nil)
 		}
 	}
 	for _, job := range target.Jobs {

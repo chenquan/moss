@@ -181,7 +181,7 @@ func OptionBool(r Request, key string) (bool, *CodedError) {
 
 func IsMutating(operation string) bool {
 	switch operation {
-	case "source.ingest", "source.mark_sensitive", "compile.start", "compile.submit", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.undo", "action.create.plan", "action.update.plan", "action.apply", "source.forget.plan", "knowledge.rollback.plan", "knowledge.reindex", "knowledge.backfill.plan", "system.export", "system.restore", "system.recover":
+	case "source.ingest", "source.mark_sensitive", "compile.start", "compile.submit", "compile.preview", "compile.apply", "compile.abort", "plan.apply", "plan.undo", "action.create.plan", "action.update.plan", "action.apply", "action.result.plan", "action.result.apply", "source.forget.plan", "knowledge.rollback.plan", "knowledge.reindex", "knowledge.backfill.plan", "system.export", "system.restore", "system.recover":
 		return true
 	default:
 		return false
@@ -210,6 +210,8 @@ func SupportedCapabilities() []Capability {
 		{Operation: "knowledge.candidates", Description: "Find local knowledge candidates"},
 		{Operation: "knowledge.history", Description: "Read managed article history"},
 		{Operation: "knowledge.insights", Description: "Read deterministic decision review insights"},
+		{Operation: "knowledge.review.scan", Description: "Scan explicit knowledge and action follow-up review signals"},
+		{Operation: "knowledge.context.bundle", Description: "Assemble a bounded metadata-first evidence context"},
 		{Operation: "knowledge.materialize", Description: "Read a verified managed article"},
 		{Operation: "knowledge.reindex", Mutating: true, Description: "Rebuild the local article search index without model calls"},
 		{Operation: "knowledge.backfill.plan", Mutating: true, Description: "Create an explicit legacy backfill manifest; model compilation remains Skill-driven"},
@@ -217,6 +219,8 @@ func SupportedCapabilities() []Capability {
 		{Operation: "action.create.plan", Mutating: true, Description: "Create a pending action plan"},
 		{Operation: "action.query", Description: "Query today's and waiting actions"},
 		{Operation: "action.update.plan", Mutating: true, Description: "Create a pending action update plan"},
+		{Operation: "action.result.apply", Mutating: true, Description: "Apply a confirmed action result"},
+		{Operation: "action.result.plan", Mutating: true, Description: "Create a pending action result plan"},
 		{Operation: "source.forget.plan", Mutating: true, Description: "Preview forgetting local source information"},
 		{Operation: "knowledge.rollback.plan", Mutating: true, Description: "Preview a managed article rollback"},
 		{Operation: "audit.query", Description: "Query local audit history"},

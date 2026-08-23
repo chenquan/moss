@@ -48,6 +48,8 @@ Use this shape for every request. `arguments` is always an object, even when it 
 | Browse knowledge | `knowledge.catalog` | optional `topic`, `limit` | read-only |
 | Search knowledge | `knowledge.candidates` | `query`, optional `topic`, `limit` | read-only; use summaries only for selection |
 | Review decisions | `knowledge.insights` | optional `topic`, `limit`; optional `options.allow_sensitive` | read-only; lifecycle signals are evidence, and `shared_source` action links are not causal |
+| Scan explicit maintenance signals | `knowledge.review.scan` | optional `topic`, `limit`, `as_of`, `missing_result_after_hours`; optional `options.allow_sensitive` | read-only; never creates actions, relations, or notifications |
+| Build evidence context | `knowledge.context.bundle` | optional `topic`/`query`, `limit`; optional `options.allow_sensitive` | read-only metadata bundle; article bodies require `knowledge.materialize` |
 | Rebuild search index | `knowledge.reindex` | none | **MUTATING**; explicit maintenance only, never invokes a model |
 | Plan legacy backfill | `knowledge.backfill.plan` | optional `source_ids`, `limit` | **MUTATING** manifest only; Skill must start/review compile jobs; never automatic on upgrade |
 | Read selected article | `knowledge.materialize` | exactly one `article_id` or `slug`; optional `options.inline_content` | read-only; cite returned article/source references; use the returned managed path and `bytes` when content is not inline |
@@ -56,6 +58,7 @@ Use this shape for every request. `arguments` is always an object, even when it 
 | Create an action | `action.create.plan` → `action.apply` | `kind`, `title`, details/status/due/waiting/sensitivity/source as needed; then `plan_id` | plan is **MUTATING**; confirm before apply |
 | Change an action | `action.update.plan` → `action.apply` | `action_id` plus changed fields; then `plan_id` | **MUTATING**; show before/after and confirm |
 | Ask what to move | `action.query` | optional date/status/limit/include_completed | read-only; report today/overdue/waiting buckets |
+| Record an action outcome | `action.result.plan` → `action.result.apply` | `action_id`, `status`, `summary`, optional source/sensitivity/metadata; then `plan_id` | **MUTATING**; show result diff and require confirmation; action status remains unchanged |
 | Forget source/project data | `source.forget.plan` → `plan.inspect` → `plan.apply` | `source_ids` or unambiguous `origin_contains`; then `plan_id` | plan does not delete; show impact, recovery window, risks, and confirm |
 | Undo a safety plan | `plan.inspect` → `plan.undo` | `plan_id` | **MUTATING**; only unchanged recoverable plans and explicit confirmation |
 | Inspect an existing plan | `plan.inspect` | `plan_id` | read-only |
@@ -75,6 +78,16 @@ Use `knowledge.insights` before composing an answer about why a decision was mad
 - Treat an action's `association: shared_source` as evidence overlap only. It is not a causal or dependency relationship.
 - Article associations contain metadata only. If `drift` is true, or if evidence is unavailable, do not quote or infer from the unverified content; use the existing managed materialization/history flow for a verified follow-up.
 - Never infer `contradicts`, repair facts, or write actions from an insights response. Any mutation requires its own plan and confirmation workflow.
+
+### Explicit relations, review scan, and context bundle
+
+The compile `write` payload may include a bounded `relations` array. Each entry uses one of `supports`, `contradicts`, `supersedes`, `depends_on`, `produces`, or `resulted_in` and typed `from`/`to` endpoints (`source`, `fact`, `article`, `action`, or `action_result`). Relations are explicit only: shared text, shared sources, and similar labels never create `contradicts` or causal edges. Relation entries are previewed and applied atomically with their compile batch; stale versions, forgotten endpoints, duplicates, self-relations, and unauthorized sensitivity are stop conditions.
+
+Use `knowledge.review.scan` when the user asks what needs maintenance. It reports lifecycle/evidence/article-drift signals, stored contradictions, due fact reviews, actions without results, and results without an explicit `resulted_in` link. It is read-only and does not schedule, notify, create plans, or change records. Use `as_of` for deterministic replay and `missing_result_after_hours` for the long-term action threshold.
+
+Use `knowledge.context.bundle` to gather a bounded evidence set for composing an answer. It returns article metadata, managed paths, versions, hashes, citations, facts, explicit relations, permitted actions/results, and review signals. Article bodies are intentionally absent; call `knowledge.materialize` for the selected managed reference and verify its hash before quoting it.
+
+An action result is a separate durable record with status `succeeded`, `failed`, `partial`, `cancelled`, or `unknown`. Applying it creates only `action → produces → action_result`; it never marks the action done and never updates facts or articles. Later knowledge feedback must be an explicit compile relation, normally `action_result → resulted_in → fact` or article.
 
 ## 3. Compile stage rules
 

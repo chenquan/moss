@@ -25,6 +25,9 @@ func TestEmbeddedSchemasValidateStageContracts(t *testing.T) {
 	if err := ValidateMulti("write", []byte(`{"articles":[],"facts":[{"operation":"create","fact_key":"k","kind":"fact","text":"v","status":"active","source_ids":["src_1"]}]}`)); err != nil {
 		t.Fatalf("multi write rejected: %v", err)
 	}
+	if err := ValidateMulti("write", []byte(`{"articles":[],"facts":[{"operation":"create","fact_key":"k2","kind":"decision","text":"v","status":"active","source_ids":["src_1"],"review_after":"2026-09-01T00:00:00Z"}],"relations":[{"relation_type":"supports","from":{"type":"source","id":"src_1"},"to":{"type":"fact","id":"fact_1","version":1},"source_id":"src_1"}]}`)); err != nil {
+		t.Fatalf("multi write relation payload rejected: %v", err)
+	}
 }
 
 func TestNormalizeSourceIDsSortsAndDeduplicates(t *testing.T) {

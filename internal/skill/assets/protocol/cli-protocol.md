@@ -79,8 +79,8 @@ The supported operation families are:
 - System: `system.handshake`, `system.health`, `system.capabilities`, `system.export`, `system.restore`, `system.recover`
 - Sources: `source.ingest`, `source.get`, `source.list`, `source.mark_sensitive`, `source.forget.plan`
 - Compile jobs: `compile.start`, `compile.next`, `compile.submit`, `compile.status`, `compile.preview`, `compile.apply`, `compile.abort`
-- Knowledge: `knowledge.catalog`, `knowledge.candidates`, `knowledge.insights`, `knowledge.materialize`, `knowledge.history`, `knowledge.reindex`, `knowledge.backfill.plan`, `knowledge.rollback.plan`
-- Actions: `action.create.plan`, `action.query`, `action.update.plan`, `action.apply`
+- Knowledge: `knowledge.catalog`, `knowledge.candidates`, `knowledge.insights`, `knowledge.review.scan`, `knowledge.context.bundle`, `knowledge.materialize`, `knowledge.history`, `knowledge.reindex`, `knowledge.backfill.plan`, `knowledge.rollback.plan`
+- Actions: `action.create.plan`, `action.query`, `action.update.plan`, `action.apply`, `action.result.plan`, `action.result.apply`
 - Plans/audit: `plan.inspect`, `plan.apply`, `plan.undo`, `audit.query`
 
-The compile stages are strictly ordered: `extract` → `classify` → `write`. `compile.start` accepts legacy `source_id` or a stable `source_ids` set. `compile.apply` applies only a confirmed compile knowledge plan; generic `plan.apply` applies confirmed forget or rollback plans. `action.apply` applies a confirmed action plan.
+The compile stages are strictly ordered: `extract` → `classify` → `write`. `compile.start` accepts legacy `source_id` or a stable `source_ids` set. `compile.apply` applies only a confirmed compile knowledge plan; generic `plan.apply` applies confirmed forget or rollback plans. `action.apply` applies a confirmed action plan. `action.result.apply` records a confirmed outcome and never completes the action or mutates facts/articles.

@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 const (
 	dataDirEnv = "MOSS_DATA_DIR"
@@ -322,6 +322,40 @@ func (s *Storage) migrate(ctx context.Context) error {
 			diff_json BLOB NOT NULL,
 			PRIMARY KEY(plan_id, ordinal)
 		)`,
+		`CREATE TABLE IF NOT EXISTS relations (
+			relation_id TEXT PRIMARY KEY,
+			relation_type TEXT NOT NULL CHECK (relation_type IN ('supports', 'contradicts', 'supersedes', 'depends_on', 'produces', 'resulted_in')),
+			from_type TEXT NOT NULL CHECK (from_type IN ('source', 'fact', 'article', 'action', 'action_result')),
+			from_id TEXT NOT NULL,
+			from_version INTEGER NOT NULL DEFAULT 0,
+			to_type TEXT NOT NULL CHECK (to_type IN ('source', 'fact', 'article', 'action', 'action_result')),
+			to_id TEXT NOT NULL,
+			to_version INTEGER NOT NULL DEFAULT 0,
+			source_id TEXT REFERENCES sources(source_id),
+			origin_kind TEXT NOT NULL DEFAULT 'explicit',
+			origin_id TEXT,
+			created_at TEXT NOT NULL,
+			UNIQUE(relation_type, from_type, from_id, from_version, to_type, to_id, to_version)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_type, from_id, from_version, relation_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_type, to_id, to_version, relation_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_id, relation_id)`,
+		`CREATE TABLE IF NOT EXISTS compile_batch_relations (
+			plan_id TEXT NOT NULL REFERENCES compile_batch_plans(plan_id) ON DELETE CASCADE,
+			ordinal INTEGER NOT NULL,
+			relation_id TEXT NOT NULL,
+			relation_type TEXT NOT NULL,
+			from_type TEXT NOT NULL,
+			from_id TEXT NOT NULL,
+			from_version INTEGER NOT NULL,
+			to_type TEXT NOT NULL,
+			to_id TEXT NOT NULL,
+			to_version INTEGER NOT NULL,
+			source_id TEXT,
+			diff_json BLOB NOT NULL,
+			PRIMARY KEY(plan_id, ordinal),
+			UNIQUE(plan_id, relation_type, from_type, from_id, from_version, to_type, to_id, to_version)
+		)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS article_fts USING fts5(article_id UNINDEXED, version UNINDEXED, title, slug, tags, summary, body, source_ids)`,
 		`CREATE TABLE IF NOT EXISTS index_meta (
 			name TEXT PRIMARY KEY,
@@ -427,6 +461,36 @@ func (s *Storage) migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			applied_at TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS action_results (
+			result_id TEXT PRIMARY KEY,
+			action_id TEXT NOT NULL REFERENCES actions(action_id),
+			version INTEGER NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed', 'partial', 'cancelled', 'unknown')),
+			summary TEXT NOT NULL,
+			source_id TEXT REFERENCES sources(source_id),
+			sensitivity TEXT NOT NULL CHECK (sensitivity IN ('normal', 'sensitive', 'restricted')),
+			metadata_json BLOB,
+			created_at TEXT NOT NULL,
+			forgotten_at TEXT,
+			UNIQUE(action_id, version)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_action_results_action ON action_results(action_id, version, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_action_results_source ON action_results(source_id, result_id)`,
+		`CREATE TABLE IF NOT EXISTS action_result_plans (
+			plan_id TEXT PRIMARY KEY,
+			state TEXT NOT NULL CHECK (state IN ('pending', 'applied', 'expired')),
+			action_id TEXT NOT NULL,
+			result_id TEXT NOT NULL UNIQUE,
+			result_version INTEGER NOT NULL DEFAULT 1,
+			base_revision INTEGER NOT NULL,
+			proposed_json BLOB NOT NULL,
+			diff_json BLOB NOT NULL,
+			risk_json BLOB NOT NULL,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			applied_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_action_result_plans_state ON action_result_plans(state, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_actions_status_due ON actions(status, due_at, action_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_actions_source ON actions(source_id, action_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_action_plans_state ON action_plans(state, created_at)`,
@@ -463,6 +527,11 @@ func (s *Storage) migrate(ctx context.Context) error {
 		{table: "facts", name: "freshness", def: "TEXT NOT NULL DEFAULT 'current'"},
 		{table: "articles", name: "forgotten_at", def: "TEXT"},
 		{table: "actions", name: "forgotten_at", def: "TEXT"},
+		{table: "facts", name: "review_after", def: "TEXT"},
+		{table: "compile_batch_facts", name: "review_after", def: "TEXT"},
+		{table: "compile_batch_facts", name: "previous_review_after", def: "TEXT"},
+		{table: "compile_batch_facts", name: "previous_freshness", def: "TEXT"},
+		{table: "action_result_plans", name: "result_version", def: "INTEGER NOT NULL DEFAULT 1"},
 	} {
 		if err := ensureColumn(ctx, s.DB, column.table, column.name, column.def); err != nil {
 			return err
@@ -482,7 +551,7 @@ func (s *Storage) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	if value != fmt.Sprint(SchemaVersion) && (value == "1" || value == "2" || value == "3" || value == "4") && SchemaVersion == 5 {
+	if value != fmt.Sprint(SchemaVersion) && (value == "1" || value == "2" || value == "3" || value == "4" || value == "5") && SchemaVersion == 6 {
 		if _, err := s.DB.ExecContext(ctx, `UPDATE schema_meta SET value = ? WHERE key = 'schema_version'`, fmt.Sprint(SchemaVersion)); err != nil {
 			return fmt.Errorf("upgrade schema version: %w", err)
 		}

@@ -302,7 +302,9 @@ knowledge.materialize
 - `evidence_unavailable` 表示引用来源或抽取工件当前不可验证；不要把该决策当作已有完整证据支持的结论。
 - 行动关联会标记为 `shared_source`，只表示共享证据，不表示因果关系；文章只返回经过受管路径和哈希检查的元数据，不内联未经验证的正文。
 - 敏感或受限的决策及关联默认被过滤；只有在确有必要时，才在请求 `options` 中显式设置 `"allow_sensitive": true`。
-- 首期不会推断 `contradicts`，也不会自动修改知识。
+- `knowledge.review.scan` 是显式、只读的维护扫描，支持 `topic`、`limit`、`as_of` 和 `missing_result_after_hours`。它会返回 stale/superseded/retracted、证据不可用、文章漂移、到期复核、显式 `contradicts`、长期无结果行动和结果反馈缺口；不会创建行动、关系、通知或修改知识。
+- `knowledge.context.bundle` 返回有上限的事实、决策、显式关系、来源定位、受管文章路径/版本/哈希、行动、行动结果和审阅信号。文章正文默认不内联，选定后继续调用 `knowledge.materialize` 做哈希校验和正文读取。
+- 六类关系只能显式写入：`supports`、`contradicts`、`supersedes`、`depends_on`、`produces`、`resulted_in`。共享来源、文本相似或共同主题不会自动推断冲突或因果；关系在编译批次中与文章/事实原子应用。
 
 典型请求只需要提供操作和可选参数：
 
@@ -338,6 +340,18 @@ action.apply（confirmed: true）
 
 行动类型包括 `task`、`commitment` 和 `reminder`，状态包括 `open`、`in_progress`、`done`、`deferred` 和 `cancelled`。`action.query` 用于查询今天、逾期和等待中的行动。
 
+行动结果使用独立的确认流：
+
+~~~
+action.result.plan
+    ↓  展示结果状态、摘要、来源、风险和过期时间
+action.result.apply（confirmed: true）
+    ↓
+action → produces → action_result
+~~~
+
+结果状态包括 `succeeded`、`failed`、`partial`、`cancelled` 和 `unknown`。应用结果不会自动把行动标记为 `done`，也不会自动更新事实或文章；后续知识反馈必须通过显式编译关系（例如 `action_result → resulted_in → fact`）完成。
+
 ### 忘记、回滚、备份和恢复
 
 高影响操作必须先创建计划、展示影响范围并获得明确确认：
@@ -363,12 +377,12 @@ action.apply（confirmed: true）
 | 系统 | `system.recover` | 写入/恢复 |
 | 来源 | `source.get`、`source.list` | 只读 |
 | 来源 | `source.ingest`、`source.mark_sensitive` | 写入 |
-| 知识 | `knowledge.catalog`、`knowledge.candidates`、`knowledge.insights`、`knowledge.materialize`、`knowledge.history` | 只读 |
+| 知识 | `knowledge.catalog`、`knowledge.candidates`、`knowledge.insights`、`knowledge.review.scan`、`knowledge.context.bundle`、`knowledge.materialize`、`knowledge.history` | 只读 |
 | 编译 | `compile.next`、`compile.status`、`plan.inspect`、`audit.query` | 只读 |
 | 编译 | `compile.start`、`compile.submit`、`compile.preview`、`compile.apply`、`compile.abort` | 写入/计划 |
 | 计划 | `plan.apply`、`plan.undo` | 写入/确认 |
 | 行动 | `action.query` | 只读 |
-| 行动 | `action.create.plan`、`action.update.plan`、`action.apply` | 写入/确认 |
+| 行动 | `action.create.plan`、`action.update.plan`、`action.apply`、`action.result.plan`、`action.result.apply` | 写入/确认 |
 | 安全 | `source.forget.plan`、`knowledge.rollback.plan` | 写入/计划 |
 
 完整的参数、阶段规则、稳定错误和 Skill 路由说明见：

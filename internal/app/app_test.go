@@ -852,7 +852,7 @@ func TestMultiSourceBatchPlanAppliesArticlesAndFactsAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = store.Close()
-	writeStage(2, fmt.Sprintf(`{"articles":[{"operation":"create","title":"Shared Note","slug":"shared-note","summary":"A shared note","body":"Both sources agree.","sensitivity":"normal","tags":["project"],"source_ids":[%q,%q],"citations":[{"source_id":%q,"locator":"line 1"}]}],"facts":[{"operation":"create","fact_key":"project:shared","kind":"fact","text":"Both sources agree.","status":"active","source_ids":[%q,%q],"extraction_id":%q}]}`, sourceIDs[0], sourceIDs[1], sourceIDs[0], sourceIDs[0], sourceIDs[1], extractionID), "write")
+	writeStage(2, fmt.Sprintf(`{"articles":[{"operation":"create","title":"Shared Note","slug":"shared-note","summary":"A shared note","body":"Both sources agree.","sensitivity":"normal","tags":["project"],"source_ids":[%q,%q],"citations":[{"source_id":%q,"locator":"line 1"}]}],"facts":[{"operation":"create","fact_key":"project:shared","kind":"fact","text":"Both sources agree.","status":"active","source_ids":[%q,%q],"extraction_id":%q}],"relations":[{"relation_type":"supports","from":{"type":"source","id":%q},"to":{"type":"source","id":%q},"source_id":%q}]}`, sourceIDs[0], sourceIDs[1], sourceIDs[0], sourceIDs[0], sourceIDs[1], extractionID, sourceIDs[0], sourceIDs[1], sourceIDs[0]), "write")
 	preview := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-preview", Operation: "compile.preview", Actor: actor, Arguments: map[string]json.RawMessage{"job_id": json.RawMessage(mustJSON(jobID))}, IdempotencyKey: "idem-multi-preview"})
 	if !preview.OK {
 		t.Fatalf("multi preview failed: %+v", preview.Error)
@@ -878,6 +878,14 @@ func TestMultiSourceBatchPlanAppliesArticlesAndFactsAtomically(t *testing.T) {
 	var factStatus string
 	if err := store.DB.QueryRow(`SELECT status FROM facts WHERE kind = 'fact' AND fact_key = 'project:shared'`).Scan(&factStatus); err != nil || factStatus != "active" {
 		t.Fatalf("fact status = %q, err = %v", factStatus, err)
+	}
+	var factCitationCount int
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM fact_citations fc JOIN facts f ON f.fact_id = fc.fact_id AND f.current_version = fc.version WHERE f.kind = 'fact' AND f.fact_key = 'project:shared'`).Scan(&factCitationCount); err != nil || factCitationCount != 2 {
+		t.Fatalf("current fact citation count = %d, err = %v", factCitationCount, err)
+	}
+	var relationCount int
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM relations WHERE relation_type = 'supports' AND from_id = ? AND to_id = ?`, sourceIDs[0], sourceIDs[1]).Scan(&relationCount); err != nil || relationCount != 1 {
+		t.Fatalf("batch relation count = %d, err = %v", relationCount, err)
 	}
 	reindex := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-reindex", Operation: "knowledge.reindex", Actor: actor, Arguments: map[string]json.RawMessage{}, IdempotencyKey: "idem-multi-reindex"})
 	if !reindex.OK {

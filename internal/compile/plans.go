@@ -409,6 +409,13 @@ func Undo(ctx context.Context, store *storage.Storage, req protocol.Request) (pr
 	}
 	record, codedErr := loadPlan(ctx, store, args.PlanID)
 	if codedErr != nil {
+		if codedErr.Code == "PLAN_NOT_FOUND" {
+			batch, batchErr := loadBatchPlan(ctx, store, args.PlanID)
+			if batchErr != nil {
+				return protocol.Response{}, batchErr
+			}
+			return undoBatch(ctx, store, req, batch)
+		}
 		return protocol.Response{}, codedErr
 	}
 	if record.State != "applied" {
