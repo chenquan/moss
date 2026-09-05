@@ -145,7 +145,7 @@ func scanReviewItems(ctx context.Context, store *storage.Storage, settings revie
 }
 
 func scanFactReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) []reviewItem {
-	rows, err := store.DB.QueryContext(ctx, `SELECT f.fact_id, f.fact_key, f.kind, f.current_version, f.status, f.freshness, COALESCE(f.review_after, ''), COALESCE(fv.text, ''), COALESCE(fv.extraction_id, '') FROM facts f JOIN fact_versions fv ON fv.fact_id = f.fact_id AND fv.version = f.current_version ORDER BY f.fact_id ASC`)
+	rows, err := store.DB.QueryContext(ctx, `SELECT f.fact_id, f.fact_key, f.kind, f.current_version, f.status, f.freshness, COALESCE(f.review_after, ''), COALESCE(fv.text, ''), COALESCE(fv.extraction_id, '') FROM facts f JOIN fact_versions fv ON fv.fact_id = f.fact_id AND fv.version = f.current_version ORDER BY f.fact_id ASC LIMIT ?`, maxReviewCandidates)
 	if err != nil {
 		return []reviewItem{{Kind: "storage_error", Severity: "error", EntityType: "storage", EntityID: "facts", Reason: "fact review scan could not read facts"}}
 	}
@@ -319,7 +319,7 @@ func scanContradictionItems(ctx context.Context, store *storage.Storage, setting
 
 func scanActionReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) ([]reviewItem, *protocol.CodedError) {
 	cutoff := settings.AsOf.Add(-time.Duration(settings.MissingResultAfterHour) * time.Hour)
-	rows, err := store.DB.QueryContext(ctx, `SELECT a.action_id, a.title, a.details, a.status, a.sensitivity, a.created_at, COALESCE(a.source_id, ''), COALESCE(s.source_id, ''), COALESCE(s.sensitivity, 'normal'), COALESCE(s.forgotten_at, '') FROM actions a LEFT JOIN sources s ON s.source_id = a.source_id WHERE a.forgotten_at IS NULL AND NOT EXISTS (SELECT 1 FROM action_results ar WHERE ar.action_id = a.action_id AND ar.forgotten_at IS NULL) ORDER BY a.action_id ASC`)
+	rows, err := store.DB.QueryContext(ctx, `SELECT a.action_id, a.title, a.details, a.status, a.sensitivity, a.created_at, COALESCE(a.source_id, ''), COALESCE(s.source_id, ''), COALESCE(s.sensitivity, 'normal'), COALESCE(s.forgotten_at, '') FROM actions a LEFT JOIN sources s ON s.source_id = a.source_id WHERE a.forgotten_at IS NULL AND NOT EXISTS (SELECT 1 FROM action_results ar WHERE ar.action_id = a.action_id AND ar.forgotten_at IS NULL) ORDER BY a.action_id ASC LIMIT ?`, maxReviewCandidates)
 	if err != nil {
 		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read actions for review scan", true, nil)
 	}
@@ -356,7 +356,7 @@ func scanResultReviewItems(ctx context.Context, store *storage.Storage, settings
 			feedback[relation.From.ID] = true
 		}
 	}
-	rows, err := store.DB.QueryContext(ctx, `SELECT ar.result_id, ar.action_id, ar.version, ar.sensitivity, a.title, a.sensitivity, COALESCE(ar.source_id, ''), COALESCE(s.source_id, ''), COALESCE(s.sensitivity, 'normal'), COALESCE(s.forgotten_at, ''), COALESCE(a.source_id, ''), COALESCE(action_source.source_id, ''), COALESCE(action_source.sensitivity, 'normal'), COALESCE(action_source.forgotten_at, '') FROM action_results ar JOIN actions a ON a.action_id = ar.action_id AND a.forgotten_at IS NULL LEFT JOIN sources s ON s.source_id = ar.source_id LEFT JOIN sources action_source ON action_source.source_id = a.source_id WHERE ar.forgotten_at IS NULL ORDER BY ar.result_id ASC`)
+	rows, err := store.DB.QueryContext(ctx, `SELECT ar.result_id, ar.action_id, ar.version, ar.sensitivity, a.title, a.sensitivity, COALESCE(ar.source_id, ''), COALESCE(s.source_id, ''), COALESCE(s.sensitivity, 'normal'), COALESCE(s.forgotten_at, ''), COALESCE(a.source_id, ''), COALESCE(action_source.source_id, ''), COALESCE(action_source.sensitivity, 'normal'), COALESCE(action_source.forgotten_at, '') FROM action_results ar JOIN actions a ON a.action_id = ar.action_id AND a.forgotten_at IS NULL LEFT JOIN sources s ON s.source_id = ar.source_id LEFT JOIN sources action_source ON action_source.source_id = a.source_id WHERE ar.forgotten_at IS NULL ORDER BY ar.result_id ASC LIMIT ?`, maxReviewCandidates)
 	if err != nil {
 		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read action results for review scan", true, nil)
 	}

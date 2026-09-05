@@ -144,9 +144,14 @@ func ContextBundle(ctx context.Context, store *storage.Storage, req protocol.Req
 	for _, result := range results {
 		selected[EndpointActionResult+":"+result.ResultID] = true
 	}
-	relations, codedErr := LoadPermittedRelations(ctx, store.DB, allowSensitive, maxContextLimit*10)
+	relationCap := maxContextLimit * 10
+	relations, codedErr := LoadPermittedRelations(ctx, store.DB, allowSensitive, relationCap+1)
 	if codedErr != nil {
 		return nil, codedErr
+	}
+	relationCandidatesTruncated := len(relations) > relationCap
+	if relationCandidatesTruncated {
+		relations = relations[:relationCap]
 	}
 	filteredRelations := make([]RelationView, 0, limit)
 	for _, relation := range relations {
@@ -177,7 +182,7 @@ func ContextBundle(ctx context.Context, store *storage.Storage, req protocol.Req
 		return nil, reviewErr
 	}
 	reviewItems := reviewValue.Items
-	truncated := len(relations) > len(filteredRelations)
+	truncated := len(relations) > len(filteredRelations) || relationCandidatesTruncated
 	if len(reviewItems) > limit {
 		reviewItems = reviewItems[:limit]
 		truncated = true

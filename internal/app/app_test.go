@@ -963,6 +963,51 @@ func TestMultiSourceBatchPlanAppliesArticlesAndFactsAtomically(t *testing.T) {
 	if !article.OK || !strings.Contains(article.Data.(map[string]any)["content"].(string), "Both sources agree") {
 		t.Fatalf("materialized batch article = %+v", article)
 	}
+
+	// A relation-only batch must be undone atomically: undo removes only the
+	// relations its own plan created and leaves other batch relations intact.
+	start3 := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-relation-start", Operation: "compile.start", Actor: actor, Arguments: map[string]json.RawMessage{"source_ids": json.RawMessage(mustJSON(sourceIDs))}, IdempotencyKey: "idem-multi-relation-start"})
+	if !start3.OK {
+		t.Fatalf("relation batch start failed: %+v", start3.Error)
+	}
+	data3 := start3.Data.(map[string]any)
+	jobID3 := data3["job_id"].(string)
+	stages3 := data3["stages"].([]any)
+	submitStage3 := func(index int, contents string, key string) {
+		path := stages3[index].(map[string]any)["result_file"].(string)
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		response := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-relation-" + key, Operation: "compile.submit", Actor: actor, Arguments: map[string]json.RawMessage{"job_id": json.RawMessage(mustJSON(jobID3)), "stage": json.RawMessage(mustJSON([]string{"extract", "classify", "write"}[index])), "result_file": json.RawMessage(mustJSON(path))}, IdempotencyKey: "idem-multi-relation-" + key})
+		if !response.OK {
+			t.Fatalf("relation batch submit %s failed: %+v", key, response.Error)
+		}
+	}
+	submitStage3(0, `{"facts":[],"decisions":[],"preferences":[],"projects":[],"people":[],"relationships":[],"actions":[],"conflicts":[],"citations":[]}`, "extract")
+	submitStage3(1, `{"categories":[],"outline":[]}`, "classify")
+	submitStage3(2, fmt.Sprintf(`{"articles":[],"facts":[],"relations":[{"relation_type":"depends_on","from":{"type":"source","id":%q},"to":{"type":"source","id":%q}}]}`, sourceIDs[1], sourceIDs[0]), "write")
+	preview3 := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-relation-preview", Operation: "compile.preview", Actor: actor, Arguments: map[string]json.RawMessage{"job_id": json.RawMessage(mustJSON(jobID3))}, IdempotencyKey: "idem-multi-relation-preview"})
+	if !preview3.OK {
+		t.Fatalf("relation batch preview failed: %+v", preview3.Error)
+	}
+	plan3 := preview3.Data.(map[string]any)["plan_id"].(string)
+	apply3 := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-relation-apply", Operation: "compile.apply", Actor: actor, Arguments: map[string]json.RawMessage{"plan_id": json.RawMessage(mustJSON(plan3)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-multi-relation-apply"})
+	if !apply3.OK {
+		t.Fatalf("relation batch apply failed: %+v", apply3.Error)
+	}
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM relations WHERE relation_type = 'depends_on' AND from_id = ? AND to_id = ?`, sourceIDs[1], sourceIDs[0]).Scan(&relationCount); err != nil || relationCount != 1 {
+		t.Fatalf("relation batch count = %d, err = %v", relationCount, err)
+	}
+	undoRelationBatch := runRequest(t, dir, protocol.Request{ProtocolVersion: protocol.SupportedVersion, RequestID: "req-multi-relation-undo", Operation: "plan.undo", Actor: actor, Arguments: map[string]json.RawMessage{"plan_id": json.RawMessage(mustJSON(plan3)), "confirmed": json.RawMessage(`true`)}, IdempotencyKey: "idem-multi-relation-undo"})
+	if !undoRelationBatch.OK {
+		t.Fatalf("relation batch undo failed: %+v", undoRelationBatch.Error)
+	}
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM relations WHERE relation_type = 'depends_on'`).Scan(&relationCount); err != nil || relationCount != 0 {
+		t.Fatalf("batch-created relation survived undo: count = %d, err = %v", relationCount, err)
+	}
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM relations WHERE relation_type = 'supports' AND from_id = ? AND to_id = ?`, sourceIDs[0], sourceIDs[1]).Scan(&relationCount); err != nil || relationCount != 1 {
+		t.Fatalf("first batch relation was removed by another batch undo: count = %d, err = %v", relationCount, err)
+	}
 }
 
 func TestLegacyBackfillPlanIsExplicitAndModelFree(t *testing.T) {
