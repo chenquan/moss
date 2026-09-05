@@ -68,6 +68,21 @@ go build -o moss .
 
 构建后的二进制会内置 Skill 资源，不需要在运行时读取源码目录。
 
+### GitHub Actions 自动打包
+
+仓库内置 GitHub Actions：每次 push 或 pull request 会在 Linux 和 macOS 上执行测试、vet、race 检查，并用 GoReleaser 生成跨平台 snapshot。推送 `v` 开头的 tag（例如 `v0.1.0`）后，Release workflow 会自动发布以下平台的压缩包和 `checksums.txt`：
+
+- macOS、Linux
+- `amd64` 和 `arm64`
+
+当前存储锁和目录权限实现依赖 Unix 语义，因此发布矩阵暂不包含 Windows；Windows 支持需要单独完成平台锁和权限适配。
+
+发布使用 `.goreleaser.yaml`，本地可以用相同命令预览打包结果：
+
+~~~bash
+goreleaser release --snapshot --clean
+~~~
+
 ### 3. 安装 Skill
 
 默认安装到当前用户的 Claude Code 全局 Skill 目录：
