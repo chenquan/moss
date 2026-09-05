@@ -51,6 +51,11 @@ type reviewData struct {
 	Truncated               bool         `json:"truncated"`
 }
 
+type reviewScanResult struct {
+	Items     []reviewItem
+	Truncated bool
+}
+
 type reviewContext struct {
 	Topic                  string
 	AsOf                   time.Time
@@ -89,69 +94,83 @@ func ReviewScan(ctx context.Context, store *storage.Storage, req protocol.Reques
 	if codedErr != nil {
 		return nil, codedErr
 	}
-	items, codedErr := scanReviewItems(ctx, store, reviewContext{Topic: topic, AsOf: asOf, MissingResultAfterHour: hours, AllowSensitive: allowSensitive})
+	scan, codedErr := scanReviewItems(ctx, store, reviewContext{Topic: topic, AsOf: asOf, MissingResultAfterHour: hours, AllowSensitive: allowSensitive})
 	if codedErr != nil {
 		return nil, codedErr
 	}
-	total := len(items)
+	total := len(scan.Items)
+	items := scan.Items
+	truncated := scan.Truncated
 	if len(items) > limit {
 		items = items[:limit]
+		truncated = true
 	}
-	return reviewData{Topic: topic, AsOf: asOf.Format(time.RFC3339Nano), MissingResultAfterHours: hours, Items: items, Count: len(items), TotalCount: total, Truncated: total > len(items)}, nil
+	return reviewData{Topic: topic, AsOf: asOf.Format(time.RFC3339Nano), MissingResultAfterHours: hours, Items: items, Count: len(items), TotalCount: total, Truncated: truncated}, nil
 }
 
-func scanReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) ([]reviewItem, *protocol.CodedError) {
-	items := make([]reviewItem, 0)
-	items = append(items, scanFactReviewItems(ctx, store, settings)...)
+func scanReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) (reviewScanResult, *protocol.CodedError) {
+	scan := reviewScanResult{Items: make([]reviewItem, 0)}
+	factItems, factTruncated := scanFactReviewItems(ctx, store, settings)
+	scan.Items = append(scan.Items, factItems...)
+	scan.Truncated = scan.Truncated || factTruncated
 	articleItems, codedErr := scanArticleReviewItems(ctx, store, settings)
 	if codedErr != nil {
-		return nil, codedErr
+		return reviewScanResult{}, codedErr
 	}
-	items = append(items, articleItems...)
+	scan.Items = append(scan.Items, articleItems...)
 	relationItems, codedErr := scanContradictionItems(ctx, store, settings)
 	if codedErr != nil {
-		return nil, codedErr
+		return reviewScanResult{}, codedErr
 	}
-	items = append(items, relationItems...)
-	actionItems, codedErr := scanActionReviewItems(ctx, store, settings)
+	scan.Items = append(scan.Items, relationItems...)
+	actionItems, actionTruncated, codedErr := scanActionReviewItems(ctx, store, settings)
 	if codedErr != nil {
-		return nil, codedErr
+		return reviewScanResult{}, codedErr
 	}
-	items = append(items, actionItems...)
-	resultItems, codedErr := scanResultReviewItems(ctx, store, settings)
+	scan.Items = append(scan.Items, actionItems...)
+	scan.Truncated = scan.Truncated || actionTruncated
+	resultItems, resultTruncated, codedErr := scanResultReviewItems(ctx, store, settings)
 	if codedErr != nil {
-		return nil, codedErr
+		return reviewScanResult{}, codedErr
 	}
-	items = append(items, resultItems...)
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].Kind != items[j].Kind {
-			return items[i].Kind < items[j].Kind
+	scan.Items = append(scan.Items, resultItems...)
+	scan.Truncated = scan.Truncated || resultTruncated
+	sort.SliceStable(scan.Items, func(i, j int) bool {
+		if scan.Items[i].Kind != scan.Items[j].Kind {
+			return scan.Items[i].Kind < scan.Items[j].Kind
 		}
-		if items[i].EntityType != items[j].EntityType {
-			return items[i].EntityType < items[j].EntityType
+		if scan.Items[i].EntityType != scan.Items[j].EntityType {
+			return scan.Items[i].EntityType < scan.Items[j].EntityType
 		}
-		if items[i].EntityID != items[j].EntityID {
-			return items[i].EntityID < items[j].EntityID
+		if scan.Items[i].EntityID != scan.Items[j].EntityID {
+			return scan.Items[i].EntityID < scan.Items[j].EntityID
 		}
-		if items[i].Version != items[j].Version {
-			return items[i].Version < items[j].Version
+		if scan.Items[i].Version != scan.Items[j].Version {
+			return scan.Items[i].Version < scan.Items[j].Version
 		}
-		if items[i].Relation == nil || items[j].Relation == nil {
-			return items[i].Relation == nil
+		if scan.Items[i].Relation == nil || scan.Items[j].Relation == nil {
+			return scan.Items[i].Relation == nil
 		}
-		return items[i].Relation.RelationID < items[j].Relation.RelationID
+		return scan.Items[i].Relation.RelationID < scan.Items[j].Relation.RelationID
 	})
-	return items, nil
+	return scan, nil
 }
 
-func scanFactReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) []reviewItem {
-	rows, err := store.DB.QueryContext(ctx, `SELECT f.fact_id, f.fact_key, f.kind, f.current_version, f.status, f.freshness, COALESCE(f.review_after, ''), COALESCE(fv.text, ''), COALESCE(fv.extraction_id, '') FROM facts f JOIN fact_versions fv ON fv.fact_id = f.fact_id AND fv.version = f.current_version ORDER BY f.fact_id ASC LIMIT ?`, maxReviewCandidates)
+func scanFactReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) ([]reviewItem, bool) {
+	rows, err := store.DB.QueryContext(ctx, `SELECT f.fact_id, f.fact_key, f.kind, f.current_version, f.status, f.freshness, COALESCE(f.review_after, ''), COALESCE(fv.text, ''), COALESCE(fv.extraction_id, '') FROM facts f JOIN fact_versions fv ON fv.fact_id = f.fact_id AND fv.version = f.current_version ORDER BY f.fact_id ASC LIMIT ?`, maxReviewCandidates+1)
 	if err != nil {
-		return []reviewItem{{Kind: "storage_error", Severity: "error", EntityType: "storage", EntityID: "facts", Reason: "fact review scan could not read facts"}}
+		return []reviewItem{{Kind: "storage_error", Severity: "error", EntityType: "storage", EntityID: "facts", Reason: "fact review scan could not read facts"}}, false
 	}
 	defer rows.Close()
 	items := make([]reviewItem, 0)
+	candidateCount := 0
+	candidateTruncated := false
 	for rows.Next() {
+		if candidateCount == maxReviewCandidates {
+			candidateTruncated = true
+			break
+		}
+		candidateCount++
 		var factID, factKey, kind, status, freshness, reviewAfter, text, extractionID string
 		var version int
 		if err := rows.Scan(&factID, &factKey, &kind, &version, &status, &freshness, &reviewAfter, &text, &extractionID); err != nil {
@@ -196,7 +215,7 @@ func scanFactReviewItems(ctx context.Context, store *storage.Storage, settings r
 		}
 		_ = sensitivity
 	}
-	return items
+	return items, candidateTruncated
 }
 
 // reviewFactEvidence preserves the privacy behavior of permittedFactEvidence
@@ -317,18 +336,25 @@ func scanContradictionItems(ctx context.Context, store *storage.Storage, setting
 	return items, nil
 }
 
-func scanActionReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) ([]reviewItem, *protocol.CodedError) {
+func scanActionReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) ([]reviewItem, bool, *protocol.CodedError) {
 	cutoff := settings.AsOf.Add(-time.Duration(settings.MissingResultAfterHour) * time.Hour)
-	rows, err := store.DB.QueryContext(ctx, `SELECT a.action_id, a.title, a.details, a.status, a.sensitivity, a.created_at, COALESCE(a.source_id, ''), COALESCE(s.source_id, ''), COALESCE(s.sensitivity, 'normal'), COALESCE(s.forgotten_at, '') FROM actions a LEFT JOIN sources s ON s.source_id = a.source_id WHERE a.forgotten_at IS NULL AND NOT EXISTS (SELECT 1 FROM action_results ar WHERE ar.action_id = a.action_id AND ar.forgotten_at IS NULL) ORDER BY a.action_id ASC LIMIT ?`, maxReviewCandidates)
+	rows, err := store.DB.QueryContext(ctx, `SELECT a.action_id, a.title, a.details, a.status, a.sensitivity, a.created_at, COALESCE(a.source_id, ''), COALESCE(s.source_id, ''), COALESCE(s.sensitivity, 'normal'), COALESCE(s.forgotten_at, '') FROM actions a LEFT JOIN sources s ON s.source_id = a.source_id WHERE a.forgotten_at IS NULL AND NOT EXISTS (SELECT 1 FROM action_results ar WHERE ar.action_id = a.action_id AND ar.forgotten_at IS NULL) ORDER BY a.action_id ASC LIMIT ?`, maxReviewCandidates+1)
 	if err != nil {
-		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read actions for review scan", true, nil)
+		return nil, false, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read actions for review scan", true, nil)
 	}
 	defer rows.Close()
 	items := make([]reviewItem, 0)
+	candidateCount := 0
+	candidateTruncated := false
 	for rows.Next() {
+		if candidateCount == maxReviewCandidates {
+			candidateTruncated = true
+			break
+		}
+		candidateCount++
 		var actionID, title, details, status, sensitivity, createdAt, sourceID, joinedSourceID, sourceSensitivity, sourceForgotten string
 		if err := rows.Scan(&actionID, &title, &details, &status, &sensitivity, &createdAt, &sourceID, &joinedSourceID, &sourceSensitivity, &sourceForgotten); err != nil {
-			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode action review candidate", true, nil)
+			return nil, false, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode action review candidate", true, nil)
 		}
 		if !sensitivityAllowed(sensitivity, settings.AllowSensitive) || !reviewTopicMatch(settings.Topic, title, details) {
 			continue
@@ -342,13 +368,13 @@ func scanActionReviewItems(ctx context.Context, store *storage.Storage, settings
 		}
 		items = append(items, reviewItem{Kind: "action_missing_result", Severity: "medium", EntityType: EndpointAction, EntityID: actionID, Reason: "action has no recorded result after the configured threshold", Impact: map[string]any{"status": status, "created_at": createdAt}})
 	}
-	return items, nil
+	return items, candidateTruncated, nil
 }
 
-func scanResultReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) ([]reviewItem, *protocol.CodedError) {
+func scanResultReviewItems(ctx context.Context, store *storage.Storage, settings reviewContext) ([]reviewItem, bool, *protocol.CodedError) {
 	permittedRelations, codedErr := LoadPermittedRelations(ctx, store.DB, settings.AllowSensitive, maxReviewCandidates)
 	if codedErr != nil {
-		return nil, codedErr
+		return nil, false, codedErr
 	}
 	feedback := make(map[string]bool)
 	for _, relation := range permittedRelations {
@@ -356,17 +382,24 @@ func scanResultReviewItems(ctx context.Context, store *storage.Storage, settings
 			feedback[relation.From.ID] = true
 		}
 	}
-	rows, err := store.DB.QueryContext(ctx, `SELECT ar.result_id, ar.action_id, ar.version, ar.sensitivity, a.title, a.sensitivity, COALESCE(ar.source_id, ''), COALESCE(s.source_id, ''), COALESCE(s.sensitivity, 'normal'), COALESCE(s.forgotten_at, ''), COALESCE(a.source_id, ''), COALESCE(action_source.source_id, ''), COALESCE(action_source.sensitivity, 'normal'), COALESCE(action_source.forgotten_at, '') FROM action_results ar JOIN actions a ON a.action_id = ar.action_id AND a.forgotten_at IS NULL LEFT JOIN sources s ON s.source_id = ar.source_id LEFT JOIN sources action_source ON action_source.source_id = a.source_id WHERE ar.forgotten_at IS NULL ORDER BY ar.result_id ASC LIMIT ?`, maxReviewCandidates)
+	rows, err := store.DB.QueryContext(ctx, `SELECT ar.result_id, ar.action_id, ar.version, ar.sensitivity, a.title, a.sensitivity, COALESCE(ar.source_id, ''), COALESCE(s.source_id, ''), COALESCE(s.sensitivity, 'normal'), COALESCE(s.forgotten_at, ''), COALESCE(a.source_id, ''), COALESCE(action_source.source_id, ''), COALESCE(action_source.sensitivity, 'normal'), COALESCE(action_source.forgotten_at, '') FROM action_results ar JOIN actions a ON a.action_id = ar.action_id AND a.forgotten_at IS NULL LEFT JOIN sources s ON s.source_id = ar.source_id LEFT JOIN sources action_source ON action_source.source_id = a.source_id WHERE ar.forgotten_at IS NULL ORDER BY ar.result_id ASC LIMIT ?`, maxReviewCandidates+1)
 	if err != nil {
-		return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read action results for review scan", true, nil)
+		return nil, false, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot read action results for review scan", true, nil)
 	}
 	defer rows.Close()
 	items := make([]reviewItem, 0)
+	candidateCount := 0
+	candidateTruncated := false
 	for rows.Next() {
+		if candidateCount == maxReviewCandidates {
+			candidateTruncated = true
+			break
+		}
+		candidateCount++
 		var resultID, actionID, sensitivity, title, actionSensitivity, sourceID, joinedSourceID, sourceSensitivity, sourceForgotten, actionSourceID, joinedActionSourceID, actionSourceSensitivity, actionSourceForgotten string
 		var version int
 		if err := rows.Scan(&resultID, &actionID, &version, &sensitivity, &title, &actionSensitivity, &sourceID, &joinedSourceID, &sourceSensitivity, &sourceForgotten, &actionSourceID, &joinedActionSourceID, &actionSourceSensitivity, &actionSourceForgotten); err != nil {
-			return nil, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode action result review candidate", true, nil)
+			return nil, false, protocol.NewCodedError("STORAGE_UNHEALTHY", "cannot decode action result review candidate", true, nil)
 		}
 		if !sensitivityAllowed(sensitivity, settings.AllowSensitive) || !sensitivityAllowed(actionSensitivity, settings.AllowSensitive) || !reviewTopicMatch(settings.Topic, title, actionID) {
 			continue
@@ -382,7 +415,7 @@ func scanResultReviewItems(ctx context.Context, store *storage.Storage, settings
 		}
 		items = append(items, reviewItem{Kind: "result_feedback_gap", Severity: "medium", EntityType: EndpointActionResult, EntityID: resultID, Version: version, Reason: "action result has no explicit resulted_in knowledge relation", Impact: map[string]any{"action_id": actionID}})
 	}
-	return items, nil
+	return items, candidateTruncated, nil
 }
 
 func permittedFactEvidence(ctx context.Context, db *sql.DB, factID string, version int, allowSensitive bool) ([]string, string, bool) {

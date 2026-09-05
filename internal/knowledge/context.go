@@ -182,7 +182,7 @@ func ContextBundle(ctx context.Context, store *storage.Storage, req protocol.Req
 		return nil, reviewErr
 	}
 	reviewItems := reviewValue.Items
-	truncated := len(relations) > len(filteredRelations) || relationCandidatesTruncated
+	truncated := len(relations) > len(filteredRelations) || relationCandidatesTruncated || reviewValue.Truncated
 	if len(reviewItems) > limit {
 		reviewItems = reviewItems[:limit]
 		truncated = true
@@ -212,11 +212,11 @@ func reviewDataFromRequest(ctx context.Context, store *storage.Storage, req prot
 	if codedErr != nil {
 		return reviewData{}, codedErr
 	}
-	items, codedErr := scanReviewItems(ctx, store, reviewContext{Topic: strings.TrimSpace(args.Topic), AsOf: asOf, MissingResultAfterHour: hours, AllowSensitive: allowSensitive})
+	scan, codedErr := scanReviewItems(ctx, store, reviewContext{Topic: strings.TrimSpace(args.Topic), AsOf: asOf, MissingResultAfterHour: hours, AllowSensitive: allowSensitive})
 	if codedErr != nil {
 		return reviewData{}, codedErr
 	}
-	return reviewData{Topic: strings.TrimSpace(args.Topic), AsOf: asOf.Format("2006-01-02T15:04:05.999999999Z07:00"), MissingResultAfterHours: hours, Items: items, Count: len(items), TotalCount: len(items)}, nil
+	return reviewData{Topic: strings.TrimSpace(args.Topic), AsOf: asOf.Format("2006-01-02T15:04:05.999999999Z07:00"), MissingResultAfterHours: hours, Items: scan.Items, Count: len(scan.Items), TotalCount: len(scan.Items), Truncated: scan.Truncated}, nil
 }
 
 func loadContextArticles(ctx context.Context, store *storage.Storage, term string, allowSensitive bool, limit int) ([]contextArticle, *protocol.CodedError) {
